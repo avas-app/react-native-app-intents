@@ -1,0 +1,28 @@
+{
+  "name": "@react-native-app-intents/cli",
+  "version": "0.0.0",
+  "description": "CLI entry points for react-native-app-intents code generation.",
+  "license": "MIT",
+  "bin": {
+    "app-intents": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@react-native-app-intents/codegen": "workspace:*"
+  }
+}

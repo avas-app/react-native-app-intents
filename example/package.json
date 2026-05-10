@@ -1,0 +1,20 @@
+{
+  "name": "@react-native-app-intents/example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example workspace package used to exercise the scaffolded APIs.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@react-native-app-intents/codegen": "workspace:*",
+    "@react-native-app-intents/core": "workspace:*",
+    "@react-native-app-intents/expo-plugin": "workspace:*",
+    "@react-native-app-intents/react-native": "workspace:*"
+  }
+}

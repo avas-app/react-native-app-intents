@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "types": ["node"],
+    "paths": {
+      "@react-native-app-intents/core": ["packages/core/src/index.ts"],
+      "@react-native-app-intents/codegen": ["packages/codegen/src/index.ts"],
+      "@react-native-app-intents/cli": ["packages/cli/src/index.ts"],
+      "@react-native-app-intents/react-native": ["packages/react-native/src/index.ts"],
+      "@react-native-app-intents/expo-plugin": ["packages/expo-plugin/src/index.ts"]
+    }
+  }
+}

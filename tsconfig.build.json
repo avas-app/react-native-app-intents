@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core/tsconfig.build.json" },
+    { "path": "./packages/codegen/tsconfig.build.json" },
+    { "path": "./packages/cli/tsconfig.build.json" },
+    { "path": "./packages/react-native/tsconfig.build.json" },
+    { "path": "./packages/expo-plugin/tsconfig.build.json" },
+    { "path": "./example/tsconfig.build.json" }
+  ]
+}

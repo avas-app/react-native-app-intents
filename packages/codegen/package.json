@@ -1,0 +1,26 @@
+{
+  "name": "@react-native-app-intents/codegen",
+  "version": "0.0.0",
+  "description": "Framework-agnostic config and codegen entry points for react-native-app-intents.",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@react-native-app-intents/core": "workspace:*"
+  }
+}

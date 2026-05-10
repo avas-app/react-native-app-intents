@@ -48,10 +48,7 @@ export const openOrder = defineIntent({
   id: "openOrder",
   title: "Open Order",
   description: "Open a specific order by number.",
-  phrases: [
-    "Open order ${orderNumber} in ${.applicationName}",
-    "Show my order ${orderNumber}",
-  ],
+  phrases: ["Open order ${orderNumber} in ${.applicationName}", "Show my order ${orderNumber}"],
   params: {
     orderNumber: p.string({
       title: "Order number",
@@ -223,41 +220,49 @@ it("routes openOrder to Order screen", async () => {
 ## Milestones
 
 ### M0 — Scaffolding
+
 - Bun workspaces monorepo with `core`, `codegen`, `cli`, `react-native`, `expo-plugin`, `example` packages.
 - TS build, oxlint, oxfmt, CI.
 
 ### M1 — Core authoring API
+
 - `defineIntent`, `defineEntity`, schema builder `p`.
 - Type inference end-to-end (`ParamsOf<I>`, generated event union shape).
 - Unit tests on schema validation and phrase placeholder checking.
 
 ### M2 — Codegen IR + iOS generator
+
 - IR types and normalizer.
 - Swift generator: `AppIntent`, `AppShortcutsProvider`, `AppEntity`, `EntityQuery`.
 - Generated `.d.ts` discriminated union.
 - CLI `generate` + `--check`.
 
 ### M3 — Android generator
+
 - `shortcuts.xml`, capabilities + inline inventory entries.
 - Manifest patcher: deep-link intent filters, `<meta-data>` for shortcuts.
 - Dynamic shortcuts mapping for entities.
 
 ### M4 — RN runtime TurboModule
+
 - iOS: handle `NSUserActivity` / App Intent continuation / URL scheme; emit JS event.
 - Android: handle deep-link / shortcut `Intent`; emit JS event.
 - `getInitialIntent`, `donate`, `updateDynamicShortcuts`.
 - Example app demonstrating end-to-end flow on both platforms.
 
 ### M5 — Expo config plugin
+
 - Wraps codegen, patches Info.plist + AndroidManifest, wires URL scheme.
 - Example with Expo prebuild.
 
 ### M6 — Localization + polish
+
 - Multi-locale phrases/titles, `.strings` / `values-*/strings.xml` emission.
 - Better error messages from codegen (file/line for invalid declarations).
 - Docs site with recipes (push-to-talk, deep-link routing, entity disambiguation).
 
 ### M7 — v1.0
+
 - Stable IR.
 - Documented public API.
 - Migration guide.
