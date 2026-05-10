@@ -8,14 +8,7 @@ A React Native library for declaring iOS App Intents and Android App Shortcuts f
 - **End-to-end type safety.** Handler params are inferred from the same schema used to generate native artifacts.
 - **Framework-agnostic.** Works with bare RN. Expo support is a thin convenience wrapper over the same codegen.
 - **Config-driven, build-time.** Intents are compiled into the native binary (App Intents requires this on iOS). No runtime registration.
-- **Tiny runtime surface.** A small native module to receive intent events and donate usage. No JSI / Nitro needed in v1.
-
-## Non-goals (for v1)
-
-- Background-only App Intents that return result snippet views.
-- A custom in-app speech recognizer (use OS Voice Control / Voice Access).
-- Generic on-device LLM-driven intent matching.
-- Replacing screen-reader / OS accessibility tooling. This library complements it.
+- **Tiny runtime surface.** A small TurboModule to receive intent events and donate usage.
 
 ## Architecture
 
@@ -23,7 +16,7 @@ A React Native library for declaring iOS App Intents and Android App Shortcuts f
 @your-scope/app-intents
 ├── core/                 # defineIntent, defineEntity, schema (p.*)
 ├── codegen/              # TS declarations -> IR -> Swift / XML / Kotlin / .d.ts
-├── react-native/         # bare RN native module + runtime JS API
+├── react-native/         # bare RN TurboModule + runtime JS API
 ├── expo-plugin/          # optional Expo config plugin (wraps codegen)
 └── cli/                  # `app-intents generate`
 ```
@@ -161,13 +154,13 @@ export default defineAppIntentsConfig({
 CLI:
 
 ```bash
-npx app-intents generate
-npx app-intents generate --check    # CI: fail if generated files are stale
+bunx app-intents generate
+bunx app-intents generate --check    # CI: fail if generated files are stale
 ```
 
 Two execution strategies for parsing intent files:
 
-- **v1 (sandboxed import):** use `tsx` / `esbuild-register`. Document that `*.intents.ts` files must be pure (no RN imports, no side effects, only `defineIntent` / `defineEntity` / schema helpers).
+- **v1 (sandboxed import):** use `tsx` / `esbuild-register` (or Bun's native TS loader). Document that `*.intents.ts` files must be pure (no RN imports, no side effects, only `defineIntent` / `defineEntity` / schema helpers).
 - **v2 (static extraction):** parse with `ts-morph` / TS compiler API; safer, no code execution.
 
 Generated files are checked in. This is the simplest, most debuggable model and works in any RN setup. Optional Gradle/Xcode build phases can be documented for users who want auto-regen.
@@ -176,7 +169,7 @@ Generated files are checked in. This is the simplest, most debuggable model and 
 
 - Run `app-intents generate` (manually or via `prebuild` script).
 - Generated Swift drops into an `ios/AppIntents/` group; manifest XML drops into `res/xml/`.
-- App developer adds the native module via autolinking.
+- App developer adds the TurboModule via autolinking.
 - Permissions/Info.plist keys patched manually with documented snippets (or via the CLI's `--patch` mode).
 
 ## Expo integration
@@ -219,11 +212,19 @@ it("routes openOrder to Order screen", async () => {
 });
 ```
 
+## Tooling
+
+- **Package manager / workspaces:** [Bun](https://bun.sh) workspaces.
+- **Linter:** [oxlint](https://oxc.rs/docs/guide/usage/linter.html).
+- **Formatter:** [oxfmt](https://oxc.rs).
+- **Type checker:** `tsc --noEmit` in CI.
+- **Test runner:** `bun test` for unit tests; example apps tested via Detox / Maestro (TBD).
+
 ## Milestones
 
 ### M0 — Scaffolding
-- Monorepo (pnpm workspaces) with `core`, `codegen`, `cli`, `react-native`, `expo-plugin`, `example` packages.
-- TS build, lint, CI.
+- Bun workspaces monorepo with `core`, `codegen`, `cli`, `react-native`, `expo-plugin`, `example` packages.
+- TS build, oxlint, oxfmt, CI.
 
 ### M1 — Core authoring API
 - `defineIntent`, `defineEntity`, schema builder `p`.
@@ -241,7 +242,7 @@ it("routes openOrder to Order screen", async () => {
 - Manifest patcher: deep-link intent filters, `<meta-data>` for shortcuts.
 - Dynamic shortcuts mapping for entities.
 
-### M4 — RN runtime native module
+### M4 — RN runtime TurboModule
 - iOS: handle `NSUserActivity` / App Intent continuation / URL scheme; emit JS event.
 - Android: handle deep-link / shortcut `Intent`; emit JS event.
 - `getInitialIntent`, `donate`, `updateDynamicShortcuts`.
@@ -264,14 +265,6 @@ it("routes openOrder to Order screen", async () => {
 
 ## Open questions
 
-- Should we ship the native module as a TurboModule from day one, or start with the legacy bridge for broader compatibility? (Leaning: TurboModule, since RN ≥ 0.74 is the realistic floor.)
 - Static extraction vs sandboxed import for codegen — when do we cut over?
 - How aggressively to support Android Capabilities / BIIs given Google's shifting Assistant strategy? (Likely: support but de-emphasize in docs; lean on App Shortcuts.)
 - Background App Intents with snippet results — punt to v1.x?
-
-## Out of scope (for now)
-
-- In-app voice recognition (Whisper / ExecuTorch).
-- Custom voice assistant UI.
-- iOS Focus filters and Live Activities integration.
-- Wear OS / watchOS surfaces.
