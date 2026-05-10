@@ -42,6 +42,9 @@ export interface CreateAppIntentsRuntimeOptions<TIntents extends IntentTuple> {
   nativeModule?: AppIntentsNativeModule;
 }
 
+const INITIAL_NATIVE_URL_POLL_ATTEMPTS = 240;
+const INITIAL_NATIVE_URL_POLL_INTERVAL_MS = 250;
+
 interface RuntimeContext<TIntents extends IntentTuple> {
   scheme: string;
   intentsById: Map<string, TIntents[number]>;
@@ -107,6 +110,8 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
   return {
     addEventListener(_event, listener) {
       const subscriptions: { remove(): void }[] = [];
+      let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+      let remainingPollAttempts = INITIAL_NATIVE_URL_POLL_ATTEMPTS;
       const emitPendingNativeUrl = async (): Promise<void> => {
         if (!nativeModule?.getInitialIntentURL) {
           return;
@@ -117,6 +122,16 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
         if (url) {
           listener({ url });
         }
+      };
+      const schedulePendingNativeUrlPoll = (): void => {
+        if (remainingPollAttempts <= 0) {
+          return;
+        }
+
+        pollTimeout = setTimeout(() => {
+          remainingPollAttempts -= 1;
+          void emitPendingNativeUrl().finally(schedulePendingNativeUrlPoll);
+        }, INITIAL_NATIVE_URL_POLL_INTERVAL_MS);
       };
 
       if (nativeEmitter) {
@@ -132,9 +147,15 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       );
       subscriptions.push(reactNative.Linking.addEventListener("url", listener));
       void emitPendingNativeUrl();
+      schedulePendingNativeUrlPoll();
 
       return {
         remove(): void {
+          if (pollTimeout) {
+            clearTimeout(pollTimeout);
+            pollTimeout = null;
+          }
+
           subscriptions.forEach((subscription) => subscription.remove());
         },
       };

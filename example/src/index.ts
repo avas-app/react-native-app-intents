@@ -9,6 +9,8 @@ import { openOrder, openSavedOrder } from "./orders.intents.js";
 export { openOrder, openSavedOrder };
 
 export const exampleIntents = [openOrder, openSavedOrder] as const;
+const INITIAL_NATIVE_URL_POLL_ATTEMPTS = 240;
+const INITIAL_NATIVE_URL_POLL_INTERVAL_MS = 250;
 const nativeModule = getNativeModule();
 const linking = getLinking(nativeModule);
 
@@ -53,6 +55,8 @@ function getLinking(nativeModule: AppIntentsNativeModule | undefined): LinkingAd
   return {
     addEventListener(_event, listener) {
       const subscriptions: { remove(): void }[] = [];
+      let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+      let remainingPollAttempts = INITIAL_NATIVE_URL_POLL_ATTEMPTS;
       const emitPendingNativeUrl = async (): Promise<void> => {
         if (!nativeModule?.getInitialIntentURL) {
           return;
@@ -63,6 +67,16 @@ function getLinking(nativeModule: AppIntentsNativeModule | undefined): LinkingAd
         if (url) {
           listener({ url });
         }
+      };
+      const schedulePendingNativeUrlPoll = (): void => {
+        if (remainingPollAttempts <= 0) {
+          return;
+        }
+
+        pollTimeout = setTimeout(() => {
+          remainingPollAttempts -= 1;
+          void emitPendingNativeUrl().finally(schedulePendingNativeUrlPoll);
+        }, INITIAL_NATIVE_URL_POLL_INTERVAL_MS);
       };
 
       if (nativeEmitter) {
@@ -78,9 +92,15 @@ function getLinking(nativeModule: AppIntentsNativeModule | undefined): LinkingAd
       );
       subscriptions.push(reactNative.Linking.addEventListener("url", listener));
       void emitPendingNativeUrl();
+      schedulePendingNativeUrlPoll();
 
       return {
         remove(): void {
+          if (pollTimeout) {
+            clearTimeout(pollTimeout);
+            pollTimeout = null;
+          }
+
           subscriptions.forEach((subscription) => subscription.remove());
         },
       };

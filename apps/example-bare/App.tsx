@@ -19,6 +19,10 @@ interface EventLogEntry {
   params: Record<string, unknown>;
 }
 
+const INITIAL_INTENT_ATTEMPTS = 12;
+const INITIAL_INTENT_RETRY_DELAY_MS = 250;
+const INITIAL_INTENT_STARTUP_WINDOW_MS = 60000;
+
 function App(): ReactElement {
   const isDarkMode = useColorScheme() === "dark";
 
@@ -47,25 +51,52 @@ function AppContent(): ReactElement {
 
   useEffect(() => {
     let mounted = true;
+    let unsubscribe = () => {};
+    let initialIntentCaptured = false;
+    const startupStartedAt = Date.now();
 
-    void exampleRuntime.getInitialIntent().then((event) => {
-      if (!mounted || !event) {
+    void (async () => {
+      for (let attempt = 0; attempt < INITIAL_INTENT_ATTEMPTS; attempt += 1) {
+        const event = await exampleRuntime.getInitialIntent();
+
+        if (!mounted) {
+          return;
+        }
+
+        if (event) {
+          initialIntentCaptured = true;
+          setInitialIntentId(event.id);
+          setEvents((current) => [
+            { id: event.id, params: event.params as Record<string, unknown> },
+            ...current,
+          ]);
+          break;
+        }
+
+        if (attempt < INITIAL_INTENT_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, INITIAL_INTENT_RETRY_DELAY_MS));
+        }
+      }
+
+      if (!mounted) {
         return;
       }
 
-      setInitialIntentId(event.id);
-      setEvents((current) => [
-        { id: event.id, params: event.params as Record<string, unknown> },
-        ...current,
-      ]);
-    });
+      unsubscribe = exampleRuntime.onAnyIntent((event) => {
+        if (
+          !initialIntentCaptured &&
+          Date.now() - startupStartedAt <= INITIAL_INTENT_STARTUP_WINDOW_MS
+        ) {
+          initialIntentCaptured = true;
+          setInitialIntentId(event.id);
+        }
 
-    const unsubscribe = exampleRuntime.onAnyIntent((event) => {
-      setEvents((current) => [
-        { id: event.id, params: event.params as Record<string, unknown> },
-        ...current,
-      ]);
-    });
+        setEvents((current) => [
+          { id: event.id, params: event.params as Record<string, unknown> },
+          ...current,
+        ]);
+      });
+    })();
 
     return () => {
       mounted = false;
