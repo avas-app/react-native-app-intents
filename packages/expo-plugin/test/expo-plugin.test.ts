@@ -56,6 +56,75 @@ test("patchSwiftAppDelegate injects quick action forwarding idempotently", () =>
   assert.equal(patchSwiftAppDelegate(patched), patched);
 });
 
+test("patchSwiftAppDelegate keeps Expo quick action handlers in AppDelegate", () => {
+  const source = [
+    "internal import Expo",
+    "import React",
+    "import ReactAppDependencyProvider",
+    "",
+    "@main",
+    "class AppDelegate: ExpoAppDelegate {",
+    "  var window: UIWindow?",
+    "",
+    "  var reactNativeDelegate: ExpoReactNativeFactoryDelegate?",
+    "  var reactNativeFactory: RCTReactNativeFactory?",
+    "",
+    "  public override func application(",
+    "    _ application: UIApplication,",
+    "    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil",
+    "  ) -> Bool {",
+    "    let delegate = ReactNativeDelegate()",
+    "    let factory = ExpoReactNativeFactory(delegate: delegate)",
+    "    delegate.dependencyProvider = RCTAppDependencyProvider()",
+    "",
+    "    reactNativeDelegate = delegate",
+    "    reactNativeFactory = factory",
+    "",
+    "    window = UIWindow(frame: UIScreen.main.bounds)",
+    "    factory.startReactNative(",
+    '      withModuleName: "main",',
+    "      in: window,",
+    "      launchOptions: launchOptions)",
+    "",
+    "    return super.application(application, didFinishLaunchingWithOptions: launchOptions)",
+    "  }",
+    "}",
+    "",
+    "class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {",
+    "  override func sourceURL(for bridge: RCTBridge) -> URL? {",
+    "    bridge.bundleURL ?? bundleURL()",
+    "  }",
+    "",
+    "  override func bundleURL() -> URL? {",
+    "    #if DEBUG",
+    '    return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")',
+    "    #else",
+    '    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")',
+    "    #endif",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  const output = patchSwiftAppDelegate(source);
+
+  assert.equal(output.match(/import ReactNativeAppIntents/g)?.length, 1);
+  assert.match(
+    output,
+    /if let shortcutItem = launchOptions\?\[\.shortcutItem\] as\? UIApplicationShortcutItem/,
+  );
+  assert.match(
+    output,
+    /class AppDelegate[\s\S]*performActionFor shortcutItem: UIApplicationShortcutItem/,
+  );
+  assert.match(output, /class AppDelegate[\s\S]*private func handleShortcutItem\(/);
+  assert.doesNotMatch(output, /class ReactNativeDelegate[\s\S]*private func handleShortcutItem\(/);
+  assert.match(
+    output,
+    /class AppDelegate[\s\S]*private func handleShortcutItem\([\s\S]*class ReactNativeDelegate:/,
+  );
+});
+
 test("Expo config helpers patch Info.plist and entitlements", () => {
   const options = defineAppIntentsConfig({
     intents: ["src/**/*.intents.ts"],

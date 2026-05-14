@@ -526,23 +526,23 @@ function injectColdLaunchShortcutHandling(source: string): string {
 }
 
 function injectQuickActionHandlerMethods(source: string): string {
-  if (source.includes("performActionFor shortcutItem: UIApplicationShortcutItem")) {
-    return source;
+  const appDelegateClassIndex = source.search(/\bclass\s+AppDelegate\s*:/);
+
+  if (appDelegateClassIndex === -1) {
+    throw new Error("Could not locate the AppDelegate class declaration.");
   }
 
-  const reactNativeDelegateIndex = source.indexOf("\nclass ReactNativeDelegate:");
-  const appDelegateClassIndex = source.indexOf("class AppDelegate:");
-  const finalClassBrace =
-    reactNativeDelegateIndex === -1
-      ? source.lastIndexOf("\n}")
-      : source.lastIndexOf("\n}", reactNativeDelegateIndex);
+  const appDelegateBraceStart = source.indexOf("{", appDelegateClassIndex);
 
-  if (
-    appDelegateClassIndex === -1 ||
-    finalClassBrace === -1 ||
-    finalClassBrace < appDelegateClassIndex
-  ) {
-    throw new Error("Could not locate the AppDelegate class closing brace.");
+  if (appDelegateBraceStart === -1) {
+    throw new Error("Could not locate the AppDelegate class opening brace.");
+  }
+
+  const appDelegateBraceEnd = findMatchingBrace(source, appDelegateBraceStart);
+  const appDelegateSource = source.slice(appDelegateClassIndex, appDelegateBraceEnd + 1);
+
+  if (appDelegateSource.includes("performActionFor shortcutItem: UIApplicationShortcutItem")) {
+    return source;
   }
 
   const methods = [
@@ -565,7 +565,7 @@ function injectQuickActionHandlerMethods(source: string): string {
     "  }",
   ].join("\n");
 
-  return `${source.slice(0, finalClassBrace)}${methods}${source.slice(finalClassBrace)}`;
+  return `${source.slice(0, appDelegateBraceEnd)}${methods}${source.slice(appDelegateBraceEnd)}`;
 }
 
 function findMatchingBrace(source: string, braceStart: number): number {
