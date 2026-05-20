@@ -580,7 +580,7 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
   }
 
   async function flushPendingEvents(): Promise<void> {
-    if (!initialUrlHandled || flushingPendingEvents || pendingEvents.length === 0) {
+    if (flushingPendingEvents || pendingEvents.length === 0) {
       return;
     }
 
@@ -618,7 +618,7 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
       return;
     }
 
-    if (!initialUrlHandled || !hasMatchingHandlers(event)) {
+    if (!hasMatchingHandlers(event)) {
       pendingEvents.push(event);
       return;
     }

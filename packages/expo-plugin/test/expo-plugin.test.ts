@@ -25,10 +25,7 @@ test("withAppIntents appends a plugin tuple", () => {
   );
 
   assert.deepEqual(config.plugins, [
-    [
-      "@avasapp/react-native-app-intents",
-      { intents: ["src/**/*.intents.ts"], scheme: "example" },
-    ],
+    ["@avasapp/react-native-app-intents", { intents: ["src/**/*.intents.ts"], scheme: "example" }],
   ]);
 });
 

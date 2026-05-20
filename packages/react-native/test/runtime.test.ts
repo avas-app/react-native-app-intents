@@ -210,6 +210,37 @@ test("runtime preserves the initial intent when linking emits it during startup"
   assert.deepEqual(received, ["5678"]);
 });
 
+test("runtime delivers foreground urls without requiring getInitialIntent", async () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      orderNumber: p.string(),
+    },
+  });
+  const linking = createLinkingAdapter(null);
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [openOrder] as const,
+    linking: linking.adapter,
+    nativeModule: {
+      async clearDonations() {},
+      async donate() {},
+      async updateDynamicShortcuts() {},
+    },
+  });
+  const received: string[] = [];
+
+  runtime.onIntent(openOrder, ({ orderNumber }) => {
+    received.push(orderNumber);
+  });
+  linking.emit(buildIntentUrl("example", openOrder, { orderNumber: "9876" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  runtime.dispose();
+
+  assert.deepEqual(received, ["9876"]);
+});
+
 test("runtime returns a startup event that arrives before any handlers subscribe", async () => {
   const openOrder = defineIntent({
     id: "openOrder",

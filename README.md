@@ -199,9 +199,7 @@ To use a different config file, pass `configPath`:
 ```json
 {
   "expo": {
-    "plugins": [
-      ["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
-    ]
+    "plugins": [["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]]
   }
 }
 ```
