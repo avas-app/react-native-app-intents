@@ -1935,7 +1935,7 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios/ReactAppDependencyProvider`)
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
-  - "ReactNativeAppIntents (from `../node_modules/@crockalet/react-native-app-intents`)"
+  - "ReactNativeAppIntents (from `../node_modules/@avasapp/react-native-app-intents`)"
   - ReactNativeDependencies (from `../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2088,7 +2088,7 @@ EXTERNAL SOURCES:
   ReactCommon:
     :path: "../node_modules/react-native/ReactCommon"
   ReactNativeAppIntents:
-    :path: "../node_modules/@crockalet/react-native-app-intents"
+    :path: "../node_modules/@avasapp/react-native-app-intents"
   ReactNativeDependencies:
     :podspec: "../node_modules/react-native/third-party-podspecs/ReactNativeDependencies.podspec"
   Yoga:

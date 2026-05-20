@@ -23,7 +23,7 @@ const {
 } =
   (ExpoConfigPlugins as typeof ExpoConfigPlugins & { default?: typeof ExpoConfigPlugins })
     .default ?? ExpoConfigPlugins;
-const EXPO_PLUGIN_PACKAGE_NAME = "@crockalet/react-native-app-intents";
+const EXPO_PLUGIN_PACKAGE_NAME = "@avasapp/react-native-app-intents";
 const DEFAULT_CONFIG_FILE_NAMES = [
   "app-intents.config.ts",
   "app-intents.config.mts",

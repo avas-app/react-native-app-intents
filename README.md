@@ -3,18 +3,18 @@
 Type-safe App Intents, App Shortcuts, and dynamic shortcut helpers for React Native.
 
 ```bash
-npm install @crockalet/react-native-app-intents
+npm install @avasapp/react-native-app-intents
 ```
 
 Full usage docs are set up for GitHub Pages at:
-`https://crockalet.github.io/react-native-app-intents/`
+`https://avasapp.github.io/react-native-app-intents/`
 
 ## Basic setup
 
 Create `app-intents.config.ts`:
 
 ```ts
-import { defineAppIntentsConfig } from "@crockalet/react-native-app-intents/codegen";
+import { defineAppIntentsConfig } from "@avasapp/react-native-app-intents/codegen";
 
 export default defineAppIntentsConfig({
   intents: ["src/**/*.intents.ts"],
@@ -36,7 +36,7 @@ export default defineAppIntentsConfig({
 Define intents:
 
 ```ts
-import { defineIntent, p } from "@crockalet/react-native-app-intents";
+import { defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const openOrder = defineIntent({
   id: "openOrder",
@@ -78,7 +78,7 @@ npx app-intents generate
 Handle intents in JS:
 
 ```ts
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 import { openOrder } from "./orders.intents";
 
 const appIntents = createAppIntentsRuntime({
@@ -189,7 +189,7 @@ duplicate your intent configuration:
 ```json
 {
   "expo": {
-    "plugins": ["@crockalet/react-native-app-intents"]
+    "plugins": ["@avasapp/react-native-app-intents"]
   }
 }
 ```
@@ -200,7 +200,7 @@ To use a different config file, pass `configPath`:
 {
   "expo": {
     "plugins": [
-      ["@crockalet/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
+      ["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
     ]
   }
 }
@@ -225,7 +225,7 @@ resource name from `androidResourceName`:
   "expo": {
     "plugins": [
       ["expo-asset", { "assets": ["./assets/shortcuts/open_order.png"] }],
-      "@crockalet/react-native-app-intents"
+      "@avasapp/react-native-app-intents"
     ]
   }
 }
@@ -302,4 +302,4 @@ bun run build
 ```
 
 The repository is a Bun workspace. `packages/react-native` is the public
-`@crockalet/react-native-app-intents` package; the other workspace packages are private internal boundaries.
+`@avasapp/react-native-app-intents` package; the other workspace packages are private internal boundaries.

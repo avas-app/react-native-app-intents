@@ -1,17 +1,17 @@
 ---
 layout: default
-title: "@crockalet/react-native-app-intents"
+title: "@avasapp/react-native-app-intents"
 ---
 
 # react-native-app-intents
 
-`@crockalet/react-native-app-intents` helps React Native apps define type-safe intents once, generate native
+`@avasapp/react-native-app-intents` helps React Native apps define type-safe intents once, generate native
 App Intents/App Shortcuts files, and route launched intents back into JavaScript.
 
 ## Install
 
 ```bash
-npm install @crockalet/react-native-app-intents
+npm install @avasapp/react-native-app-intents
 ```
 
 For iOS bare React Native apps, install pods after adding the package:
@@ -25,7 +25,7 @@ npx pod-install
 Create intent files anywhere matched by your config, for example `src/orders.intents.ts`:
 
 ```ts
-import { defineEntity, defineIntent, p } from "@crockalet/react-native-app-intents";
+import { defineEntity, defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const Order = defineEntity({
   id: "Order",
@@ -113,7 +113,7 @@ or path in React Native `Linking`; this library should only claim the
 Create `app-intents.config.ts` at your app root:
 
 ```ts
-import { defineAppIntentsConfig } from "@crockalet/react-native-app-intents/codegen";
+import { defineAppIntentsConfig } from "@avasapp/react-native-app-intents/codegen";
 
 export default defineAppIntentsConfig({
   intents: ["src/**/*.intents.ts"],
@@ -155,7 +155,7 @@ one source of truth:
 ```json
 {
   "expo": {
-    "plugins": ["@crockalet/react-native-app-intents"]
+    "plugins": ["@avasapp/react-native-app-intents"]
   }
 }
 ```
@@ -166,7 +166,7 @@ If your config lives elsewhere, pass `configPath`:
 {
   "expo": {
     "plugins": [
-      ["@crockalet/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
+      ["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
     ]
   }
 }
@@ -189,7 +189,7 @@ Android resource name.
   "expo": {
     "plugins": [
       ["expo-asset", { "assets": ["./assets/shortcuts/open_order.png"] }],
-      "@crockalet/react-native-app-intents"
+      "@avasapp/react-native-app-intents"
     ]
   }
 }
@@ -254,7 +254,7 @@ Add the package as an Expo config plugin:
   "expo": {
     "plugins": [
       [
-        "@crockalet/react-native-app-intents",
+        "@avasapp/react-native-app-intents",
         {
           "intents": ["src/**/*.intents.ts"],
           "scheme": "myapp",
@@ -333,7 +333,7 @@ so React Native can handle the rest of the app's links.
 ## Handle intents at runtime
 
 ```ts
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 import { openOrder, openSavedOrder } from "./orders.intents";
 
 const appIntents = createAppIntentsRuntime({
@@ -394,7 +394,7 @@ everything on logout or when the feature is disabled:
 ```ts
 import { useEffect } from "react";
 
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 import { openOrder } from "./orders.intents";
 
 const appIntents = createAppIntentsRuntime({
@@ -506,5 +506,5 @@ Pages. In the GitHub repository settings, set **Pages -> Build and deployment ->
 **GitHub Actions**. Push to `main`, then open:
 
 ```text
-https://crockalet.github.io/react-native-app-intents/
+https://avasapp.github.io/react-native-app-intents/
 ```

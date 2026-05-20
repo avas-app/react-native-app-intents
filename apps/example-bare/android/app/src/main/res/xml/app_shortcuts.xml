@@ -13,8 +13,8 @@
         android:shortcutLongLabel="@string/react_native_app_intents_open_order_long_label">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.crockalet.appintents.example"
-            android:targetClass="com.crockalet.appintents.example.MainActivity"
+            android:targetPackage="com.avasapp.appintents.example"
+            android:targetClass="com.avasapp.appintents.example.MainActivity"
             android:data="example://app-intents/openOrder?payload=%7B%22orderNumber%22%3A%221234%22%7D" />
         <capability-binding android:key="actions.intent.GET_ORDER">
             <parameter-binding android:key="order" android:value="1234" />
@@ -28,8 +28,8 @@
         android:shortcutLongLabel="@string/react_native_app_intents_open_saved_order_long_label">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.crockalet.appintents.example"
-            android:targetClass="com.crockalet.appintents.example.MainActivity"
+            android:targetPackage="com.avasapp.appintents.example"
+            android:targetClass="com.avasapp.appintents.example.MainActivity"
             android:data="example://app-intents/openSavedOrder?payload=%7B%22order%22%3A%7B%22id%22%3A1%2C%22number%22%3A%221234%22%2C%22customer%22%3A%22Taylor%22%7D%7D" />
         <capability-binding android:key="actions.intent.GET_ORDER">
             <parameter-binding android:key="order" android:value="Order #1234" />
@@ -43,8 +43,8 @@
         android:shortcutLongLabel="@string/react_native_app_intents_open_saved_order_order_1_long_label">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.crockalet.appintents.example"
-            android:targetClass="com.crockalet.appintents.example.MainActivity"
+            android:targetPackage="com.avasapp.appintents.example"
+            android:targetClass="com.avasapp.appintents.example.MainActivity"
             android:data="example://app-intents/openSavedOrder?payload=%7B%22order%22%3A%7B%22customer%22%3A%22Taylor%22%2C%22id%22%3A1%2C%22number%22%3A%221234%22%7D%7D" />
     </shortcut>
 </shortcuts>

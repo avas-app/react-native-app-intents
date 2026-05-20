@@ -2,7 +2,7 @@ import {
   createAppIntentsRuntime,
   type AppIntentsNativeModule,
   type LinkingAdapter,
-} from "@crockalet/react-native-app-intents";
+} from "@avasapp/react-native-app-intents";
 
 import { openOrder, openSavedOrder } from "./orders.intents.js";
 

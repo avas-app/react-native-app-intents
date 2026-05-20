@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 
 import { openOrder } from "./src/openOrder.intents";
 

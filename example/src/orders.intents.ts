@@ -1,4 +1,4 @@
-import { defineEntity, defineIntent, p } from "@crockalet/react-native-app-intents";
+import { defineEntity, defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const Order = defineEntity({
   id: "Order",

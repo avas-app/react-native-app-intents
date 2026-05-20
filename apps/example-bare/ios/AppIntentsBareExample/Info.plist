@@ -49,7 +49,7 @@
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>ReactNativeAppIntentsAppGroupIdentifier</key>
-	<string>group.com.crockalet.appintents.example</string>
+	<string>group.com.avasapp.appintents.example</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

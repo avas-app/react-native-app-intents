@@ -1268,7 +1268,7 @@ function renderTypes(
   typesOutputPath: string,
 ): string {
   const imports: string[] = [
-    'import type { IntentEventUnion, ParamsOf } from "@crockalet/react-native-app-intents";',
+    'import type { IntentEventUnion, ParamsOf } from "@avasapp/react-native-app-intents";',
   ];
   const tupleEntries: string[] = [];
   const mapEntries: string[] = [];

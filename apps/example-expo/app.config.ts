@@ -5,13 +5,13 @@ export default {
   version: "1.0.0",
   orientation: "portrait",
   ios: {
-    bundleIdentifier: "com.crockalet.appintents.expo",
+    bundleIdentifier: "com.avasapp.appintents.expo",
   },
   android: {
-    package: "com.crockalet.appintents.expo",
+    package: "com.avasapp.appintents.expo",
   },
   plugins: [
     ["expo-asset", { assets: ["./src/assets/burger.png"] }],
-    "@crockalet/react-native-app-intents",
+    "@avasapp/react-native-app-intents",
   ],
 };

@@ -10,7 +10,7 @@
     "test:plugin": "expo config --type prebuild --json"
   },
   "dependencies": {
-    "@crockalet/react-native-app-intents": "workspace:*",
+    "@avasapp/react-native-app-intents": "workspace:*",
     "expo": "^55.0.23",
     "expo-asset": "~55.0.17",
     "react": "19.2.0",

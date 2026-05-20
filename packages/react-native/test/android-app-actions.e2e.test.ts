@@ -28,7 +28,7 @@ adbTest("adb launches the example Android App Action deep link", async () => {
   });
   const url = buildIntentUrl("example", openOrder, { orderNumber: "1234" });
   const packageName =
-    process.env.RN_APP_INTENTS_ANDROID_PACKAGE ?? "com.crockalet.appintents.example";
+    process.env.RN_APP_INTENTS_ANDROID_PACKAGE ?? "com.avasapp.appintents.example";
   const adbArgs = process.env.ANDROID_SERIAL ? ["-s", process.env.ANDROID_SERIAL] : [];
   const { stdout } = await execFile("adb", [
     ...adbArgs,

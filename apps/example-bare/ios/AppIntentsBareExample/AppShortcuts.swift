@@ -2,7 +2,7 @@ import AppIntents
 import Foundation
 
 private let reactNativeAppIntentsAppGroupInfoKey = "ReactNativeAppIntentsAppGroupIdentifier"
-private let reactNativeAppIntentsAppGroupIdentifier: String? = "group.com.crockalet.appintents.example"
+private let reactNativeAppIntentsAppGroupIdentifier: String? = "group.com.avasapp.appintents.example"
 private let reactNativeAppIntentsPendingURLsKey = "ReactNativeAppIntentsPendingURLs"
 private func reactNativeAppIntentsUserDefaults() -> UserDefaults {
   if let suiteName = reactNativeAppIntentsAppGroupIdentifier,

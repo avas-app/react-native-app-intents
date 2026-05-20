@@ -16,7 +16,7 @@ test("runCli loads config and writes generated outputs", async () => {
     await writeFile(
       join(cwd, "src/orders.intents.ts"),
       [
-        'import { defineIntent, p } from "@crockalet/react-native-app-intents";',
+        'import { defineIntent, p } from "@avasapp/react-native-app-intents";',
         "",
         "export const openOrder = defineIntent({",
         '  id: "openOrder",',

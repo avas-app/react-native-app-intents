@@ -1,4 +1,4 @@
-import { defineIntent, p } from "@crockalet/react-native-app-intents";
+import { defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const openOrder = defineIntent({
   id: "openOrder",

@@ -1,11 +1,11 @@
 {
-  "name": "@crockalet/react-native-app-intents",
+  "name": "@avasapp/react-native-app-intents",
   "version": "0.2.4",
   "description": "React Native runtime, authoring API, codegen, CLI, and Expo plugin for App Intents.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/crockalet/react-native-app-intents.git",
+    "url": "git+https://github.com/avasapp/react-native-app-intents.git",
     "directory": "packages/react-native"
   },
   "bin": {

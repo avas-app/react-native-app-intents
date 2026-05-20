@@ -3,18 +3,18 @@
 Type-safe App Intents, App Shortcuts, dynamic shortcut helpers, codegen, CLI, and Expo prebuild automation for React Native.
 
 ```bash
-npm install @crockalet/react-native-app-intents
+npm install @avasapp/react-native-app-intents
 ```
 
 Full usage docs are included in this package under `docs/` and published at:
-`https://crockalet.github.io/react-native-app-intents/`
+`https://avasapp.github.io/react-native-app-intents/`
 
 ## Basic setup
 
 Create `app-intents.config.ts` at your app root:
 
 ```ts
-import { defineAppIntentsConfig } from "@crockalet/react-native-app-intents/codegen";
+import { defineAppIntentsConfig } from "@avasapp/react-native-app-intents/codegen";
 
 export default defineAppIntentsConfig({
   intents: ["src/**/*.intents.ts"],
@@ -36,7 +36,7 @@ export default defineAppIntentsConfig({
 Define intents:
 
 ```ts
-import { defineIntent, p } from "@crockalet/react-native-app-intents";
+import { defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const openOrder = defineIntent({
   id: "openOrder",
@@ -83,7 +83,7 @@ Use the package root as an Expo config plugin. The plugin auto-loads the same
 ```json
 {
   "expo": {
-    "plugins": ["@crockalet/react-native-app-intents"]
+    "plugins": ["@avasapp/react-native-app-intents"]
   }
 }
 ```
@@ -94,7 +94,7 @@ To use a different config file, pass `configPath`:
 {
   "expo": {
     "plugins": [
-      ["@crockalet/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
+      ["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
     ]
   }
 }
@@ -118,7 +118,7 @@ resource name from `androidResourceName`:
   "expo": {
     "plugins": [
       ["expo-asset", { "assets": ["./assets/shortcuts/open_order.png"] }],
-      "@crockalet/react-native-app-intents"
+      "@avasapp/react-native-app-intents"
     ]
   }
 }
@@ -164,7 +164,7 @@ only; Expo-bundled PNG assets are not used there.
 ## Runtime usage
 
 ```ts
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 import { openOrder } from "./orders.intents";
 
 const appIntents = createAppIntentsRuntime({

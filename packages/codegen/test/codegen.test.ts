@@ -17,11 +17,11 @@ test("generateAppIntents writes bare RN artifacts from intent definitions", asyn
     scheme: "example",
     ios: {
       output: "ios/AppIntents/GeneratedAppIntents.swift",
-      appGroupIdentifier: "group.com.crockalet.appintents.example",
+      appGroupIdentifier: "group.com.avasapp.appintents.example",
     },
     android: {
       manifest: "android/app/src/main/AndroidManifest.xml",
-      packageName: "com.crockalet.appintents.example",
+      packageName: "com.avasapp.appintents.example",
       shortcutsOutput: "android/app/src/main/res/xml/app_intents_shortcuts.xml",
     },
     types: { output: "src/generated/app-intents.d.ts" },
@@ -33,7 +33,7 @@ test("generateAppIntents writes bare RN artifacts from intent definitions", asyn
     await writeFile(
       join(cwd, "src/orders.intents.ts"),
       [
-        'import { defineEntity, defineIntent, p } from "@crockalet/react-native-app-intents";',
+        'import { defineEntity, defineIntent, p } from "@avasapp/react-native-app-intents";',
         "",
         "const Order = defineEntity({",
         '  id: "Order",',
@@ -149,7 +149,7 @@ test("generateAppIntents writes bare RN artifacts from intent definitions", asyn
     assert.match(generatedSwift, /static var parameterSummary: some ParameterSummary/);
     assert.match(
       generatedSwift,
-      /private let reactNativeAppIntentsAppGroupIdentifier: String\? = "group\.com\.crockalet\.appintents\.example"/,
+      /private let reactNativeAppIntentsAppGroupIdentifier: String\? = "group\.com\.avasapp\.appintents\.example"/,
     );
     assert.match(generatedSwift, /defaults\.synchronize\(\)/);
     assert.match(
@@ -254,7 +254,7 @@ test("generateAppIntents preserves existing Android deep link filters", async ()
     await writeFile(
       join(cwd, "src/orders.intents.ts"),
       [
-        'import { defineIntent, p } from "@crockalet/react-native-app-intents";',
+        'import { defineIntent, p } from "@avasapp/react-native-app-intents";',
         "",
         "export const openOrder = defineIntent({",
         '  id: "openOrder",',

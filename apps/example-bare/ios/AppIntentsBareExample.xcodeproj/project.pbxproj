@@ -278,7 +278,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.crockalet.appintents.example;
+				PRODUCT_BUNDLE_IDENTIFIER = com.avasapp.appintents.example;
 				PRODUCT_NAME = AppIntentsBareExample;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -308,7 +308,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.crockalet.appintents.example;
+				PRODUCT_BUNDLE_IDENTIFIER = com.avasapp.appintents.example;
 				PRODUCT_NAME = AppIntentsBareExample;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;

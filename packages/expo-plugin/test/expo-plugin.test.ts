@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   defineAppIntentsConfig,
   generateAppIntents,
-} from "@crockalet/react-native-app-intents/codegen";
+} from "@avasapp/react-native-app-intents/codegen";
 
 import {
   applyAndroidExpoSchemeFilters,
@@ -26,7 +26,7 @@ test("withAppIntents appends a plugin tuple", () => {
 
   assert.deepEqual(config.plugins, [
     [
-      "@crockalet/react-native-app-intents",
+      "@avasapp/react-native-app-intents",
       { intents: ["src/**/*.intents.ts"], scheme: "example" },
     ],
   ]);
@@ -337,7 +337,7 @@ test("expo plugin config drives codegen on expo-style paths", async () => {
     await writeFile(
       join(cwd, "src/orders.intents.ts"),
       [
-        'import { defineIntent, p } from "@crockalet/react-native-app-intents";',
+        'import { defineIntent, p } from "@avasapp/react-native-app-intents";',
         "",
         "export const openOrder = defineIntent({",
         '  id: "openOrder",',

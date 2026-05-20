@@ -4,12 +4,12 @@
     "baseUrl": ".",
     "paths": {
       "@react-native-app-intents/example": ["../../example/src/index.ts"],
-      "@crockalet/react-native-app-intents": ["../../packages/react-native/src/index.ts"],
-      "@crockalet/react-native-app-intents/codegen": [
+      "@avasapp/react-native-app-intents": ["../../packages/react-native/src/index.ts"],
+      "@avasapp/react-native-app-intents/codegen": [
         "../../packages/react-native/src/codegen/index.ts"
       ],
-      "@crockalet/react-native-app-intents/core": ["../../packages/react-native/src/core/index.ts"],
-      "@crockalet/react-native-app-intents/expo-plugin": [
+      "@avasapp/react-native-app-intents/core": ["../../packages/react-native/src/core/index.ts"],
+      "@avasapp/react-native-app-intents/expo-plugin": [
         "../../packages/react-native/src/expo-plugin/index.ts"
       ]
     },

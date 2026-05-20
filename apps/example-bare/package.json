@@ -10,7 +10,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "@crockalet/react-native-app-intents": "workspace:*",
+    "@avasapp/react-native-app-intents": "workspace:*",
     "@react-native-app-intents/example": "workspace:*",
     "@react-native/new-app-screen": "0.85.3",
     "react": "19.2.3",

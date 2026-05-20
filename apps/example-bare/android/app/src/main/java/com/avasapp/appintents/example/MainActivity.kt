@@ -1,4 +1,4 @@
-package com.crockalet.appintents.example
+package com.avasapp.appintents.example
 
 import android.os.Bundle
 import com.facebook.react.ReactActivity

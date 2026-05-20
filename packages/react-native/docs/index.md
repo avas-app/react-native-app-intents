@@ -1,11 +1,11 @@
-# @crockalet/react-native-app-intents
+# @avasapp/react-native-app-intents
 
 This package includes the React Native runtime, authoring API, codegen, CLI, native modules, and Expo config plugin for App Intents.
 
 ## Install
 
 ```bash
-npm install @crockalet/react-native-app-intents
+npm install @avasapp/react-native-app-intents
 ```
 
 For bare iOS apps, install pods after adding the package:
@@ -19,7 +19,7 @@ npx pod-install
 Create `app-intents.config.ts` at your app root:
 
 ```ts
-import { defineAppIntentsConfig } from "@crockalet/react-native-app-intents/codegen";
+import { defineAppIntentsConfig } from "@avasapp/react-native-app-intents/codegen";
 
 export default defineAppIntentsConfig({
   intents: ["src/**/*.intents.ts"],
@@ -59,7 +59,7 @@ Use the package root as the Expo config plugin:
 ```json
 {
   "expo": {
-    "plugins": ["@crockalet/react-native-app-intents"]
+    "plugins": ["@avasapp/react-native-app-intents"]
   }
 }
 ```
@@ -70,7 +70,7 @@ The plugin auto-loads `app-intents.config.ts`. To use another path:
 {
   "expo": {
     "plugins": [
-      ["@crockalet/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
+      ["@avasapp/react-native-app-intents", { "configPath": "./config/app-intents.ts" }]
     ]
   }
 }
@@ -93,7 +93,7 @@ Android resource name.
   "expo": {
     "plugins": [
       ["expo-asset", { "assets": ["./assets/shortcuts/open_order.png"] }],
-      "@crockalet/react-native-app-intents"
+      "@avasapp/react-native-app-intents"
     ]
   }
 }
@@ -152,7 +152,7 @@ Notes:
 ## Runtime
 
 ```ts
-import { createAppIntentsRuntime } from "@crockalet/react-native-app-intents";
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
 import { openOrder } from "./orders.intents";
 
 const appIntents = createAppIntentsRuntime({
