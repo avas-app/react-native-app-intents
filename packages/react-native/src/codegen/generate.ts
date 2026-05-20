@@ -1330,6 +1330,76 @@ function renderTypes(
   ].join("\n");
 }
 
+type AndroidActivityMatch = {
+  index: number;
+  openingTag: string;
+  source: string;
+  selfClosing: boolean;
+};
+
+function findMainActivity(manifest: string): AndroidActivityMatch | null {
+  for (const match of manifest.matchAll(/<activity\b[^>]*(?:\/>|>)/g)) {
+    const openingTag = match[0];
+    const index = match.index;
+
+    if (index === undefined || !openingTag.includes('android:name=".MainActivity"')) {
+      continue;
+    }
+
+    const selfClosing = /\/>\s*$/.test(openingTag);
+
+    if (selfClosing) {
+      return { index, openingTag, source: openingTag, selfClosing };
+    }
+
+    const closeIndex = manifest.indexOf("</activity>", index + openingTag.length);
+
+    if (closeIndex === -1) {
+      return null;
+    }
+
+    return {
+      index,
+      openingTag,
+      source: manifest.slice(index, closeIndex + "</activity>".length),
+      selfClosing,
+    };
+  }
+
+  return null;
+}
+
+function androidTagHasAttribute(tag: string, name: string, value: string): boolean {
+  return new RegExp(`\\bandroid:${name}\\s*=\\s*"${escapeRegExp(value)}"`).test(tag);
+}
+
+function hasAppIntentsFilter(activitySource: string, scheme: string): boolean {
+  const intentFilters = activitySource.match(/<intent-filter\b[\s\S]*?<\/intent-filter>/g) ?? [];
+
+  return intentFilters.some((intentFilter) => {
+    const dataTags = intentFilter.match(/<data\b[\s\S]*?(?:\/>|><\/data>)/g) ?? [];
+
+    return dataTags.some(
+      (dataTag) =>
+        androidTagHasAttribute(dataTag, "scheme", scheme) &&
+        androidTagHasAttribute(dataTag, "host", "app-intents"),
+    );
+  });
+}
+
+function renderAppIntentsFilter(scheme: string): string {
+  return [
+    "        <intent-filter>",
+    '            <action android:name="android.intent.action.VIEW" />',
+    '            <category android:name="android.intent.category.DEFAULT" />',
+    '            <category android:name="android.intent.category.BROWSABLE" />',
+    "            <data",
+    `              android:scheme="${escapeXml(scheme)}"`,
+    '              android:host="app-intents" />',
+    "        </intent-filter>",
+  ].join("\n");
+}
+
 function ensureAndroidManifest(manifest: string, config: AppIntentsConfig): string {
   if (!config.android?.manifest || !config.android.shortcutsOutput) {
     return manifest;
@@ -1337,9 +1407,7 @@ function ensureAndroidManifest(manifest: string, config: AppIntentsConfig): stri
 
   let updatedManifest = manifest;
   const shortcutsResourceName = basename(config.android.shortcutsOutput, ".xml");
-  const mainActivityTag = updatedManifest.match(
-    /<activity[\s\S]*?android:name="\.MainActivity"[\s\S]*?(?:\/>|>)/,
-  )?.[0];
+  const mainActivity = findMainActivity(updatedManifest);
 
   if (!updatedManifest.includes('android:name="android.app.shortcuts"')) {
     updatedManifest = updatedManifest.replace(
@@ -1349,26 +1417,27 @@ function ensureAndroidManifest(manifest: string, config: AppIntentsConfig): stri
   }
 
   if (
-    mainActivityTag &&
-    !mainActivityTag.includes('android:launchMode="singleTask"') &&
-    !mainActivityTag.includes('android:launchMode="singleTop"') &&
-    !mainActivityTag.includes("android:launchMode=")
+    mainActivity &&
+    !mainActivity.openingTag.includes('android:launchMode="singleTask"') &&
+    !mainActivity.openingTag.includes('android:launchMode="singleTop"') &&
+    !mainActivity.openingTag.includes("android:launchMode=")
   ) {
-    const tagEnding = mainActivityTag.endsWith("/>") ? "/>" : ">";
-    updatedManifest = updatedManifest.replace(
-      mainActivityTag,
-      `${mainActivityTag.slice(0, -tagEnding.length)}\n        android:launchMode="singleTask"${tagEnding}`,
-    );
+    const tagEnding = mainActivity.selfClosing ? "/>" : ">";
+    const updatedOpeningTag = `${mainActivity.openingTag.slice(0, -tagEnding.length)}\n        android:launchMode="singleTask"${tagEnding}`;
+    updatedManifest = updatedManifest.replace(mainActivity.openingTag, updatedOpeningTag);
   }
 
-  if (
-    !updatedManifest.includes(`android:scheme="${config.scheme}"`) ||
-    !updatedManifest.includes('android:host="app-intents"')
-  ) {
-    updatedManifest = updatedManifest.replace(
-      /(<activity[\s\S]*?android:name="\.MainActivity"[\s\S]*?>)([\s\S]*?)(<\/activity>)/,
-      `$1$2        <intent-filter>\n            <action android:name="android.intent.action.VIEW" />\n            <category android:name="android.intent.category.DEFAULT" />\n            <category android:name="android.intent.category.BROWSABLE" />\n            <data\n              android:scheme="${config.scheme}"\n              android:host="app-intents" />\n        </intent-filter>\n$3`,
-    );
+  const updatedMainActivity = findMainActivity(updatedManifest);
+
+  if (updatedMainActivity && !hasAppIntentsFilter(updatedMainActivity.source, config.scheme)) {
+    const appIntentsFilter = renderAppIntentsFilter(config.scheme);
+    const replacement = updatedMainActivity.selfClosing
+      ? `${updatedMainActivity.openingTag.replace(/\/>\s*$/, ">")}\n${appIntentsFilter}\n      </activity>`
+      : updatedMainActivity.source.replace("</activity>", `${appIntentsFilter}\n      </activity>`);
+
+    updatedManifest = `${updatedManifest.slice(0, updatedMainActivity.index)}${replacement}${updatedManifest.slice(
+      updatedMainActivity.index + updatedMainActivity.source.length,
+    )}`;
   }
 
   return updatedManifest;

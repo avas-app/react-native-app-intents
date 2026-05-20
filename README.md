@@ -91,6 +91,11 @@ appIntents.onIntent(openOrder, (params) => {
 });
 ```
 
+App-intents URLs use the reserved `app-intents` host, such as
+`myapp://app-intents/openOrder?...`. You can share `myapp` with normal app deep
+links, but route only the `app-intents` host through this library and let React
+Native `Linking` handle the rest.
+
 For auth-gated apps, donate only after a real user action, and clear donations
 plus dynamic shortcuts on logout or when the feature is disabled:
 
@@ -206,7 +211,8 @@ In Expo prebuilds, configured `ios.output`, `android.manifest`,
 relative to the app root. If `ios.output` does not start with `ios/`, it is
 written under the generated iOS project folder. The generated Android manifest
 also ensures `MainActivity` uses a foreground-intent-compatible launch mode for
-Assistant/App Action deep links.
+Assistant/App Action deep links and adds the `scheme://app-intents` filter
+without replacing existing app or Expo dev-client deep-link filters.
 
 ### Custom shortcut icons with `expo-asset`
 

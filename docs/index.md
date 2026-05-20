@@ -102,6 +102,12 @@ export const openSavedOrder = defineIntent({
 });
 ```
 
+Generated app-intents URLs use the configured scheme with the reserved
+`app-intents` host, for example `myapp://app-intents/openOrder?...`. If your
+app also uses `myapp://` for normal deep links, keep routing those links by host
+or path in React Native `Linking`; this library should only claim the
+`app-intents` host.
+
 ## Configure codegen
 
 Create `app-intents.config.ts` at your app root:
@@ -274,7 +280,8 @@ The plugin currently:
 - runs codegen with Expo-derived native paths
 - patches `Info.plist` for the URL scheme and optional Siri/app-group settings
 - patches entitlements when `ios.appGroupIdentifier` is configured
-- patches the Android manifest so `MainActivity` can receive foreground deep links
+- patches the Android manifest so `MainActivity` can receive `scheme://app-intents`
+  links without replacing existing app or Expo dev-client deep-link filters
 - injects iOS home-screen quick-action forwarding into `AppDelegate.swift`
 - adds the generated Swift source file to the Xcode project
 
@@ -316,9 +323,12 @@ private func handleShortcutItem(_ shortcutItem: UIApplicationShortcutItem) -> Bo
 }
 ```
 
-Android deep links are routed through the generated manifest intent filters and,
-when the app is already open, through the main activity's foreground-intent
-launch mode into React Native's `onNewIntent` handling.
+Android app-intents links are routed through the generated manifest intent filter
+for `scheme://app-intents`. Normal app deep links should keep flowing through
+React Native `Linking`; if you manually call `ReactNativeAppIntentsModule.handleIntent`
+from `MainActivity`, the native helper only queues URLs whose host is
+`app-intents`. Keep calling `super.onNewIntent(intent)` and `setIntent(intent)`
+so React Native can handle the rest of the app's links.
 
 ## Handle intents at runtime
 

@@ -9,6 +9,7 @@ import {
 } from "@crockalet/react-native-app-intents/codegen";
 
 import {
+  applyAndroidExpoSchemeFilters,
   applyEntitlementsAppIntentsConfig,
   applyInfoPlistAppIntentsConfig,
   patchSwiftAppDelegate,
@@ -149,6 +150,68 @@ test("Expo config helpers patch Info.plist and entitlements", () => {
   assert.deepEqual(entitlements["com.apple.security.application-groups"], [
     "group.dev.expo.example",
   ]);
+});
+
+test("Expo config helpers preserve existing URL type metadata", () => {
+  const options = defineAppIntentsConfig({
+    intents: ["src/**/*.intents.ts"],
+    scheme: "avas-app",
+  });
+  const existingInfoPlist = {
+    CFBundleURLTypes: [
+      {
+        CFBundleURLName: "com.example.avas",
+        CFBundleTypeRole: "Editor",
+        CFBundleURLSchemes: ["avas-app", "exp+avas-app"],
+      },
+      {
+        CFBundleURLName: "com.example.other",
+        CFBundleURLSchemes: ["other"],
+      },
+    ],
+  } as Parameters<typeof applyInfoPlistAppIntentsConfig>[0];
+  const infoPlist = applyInfoPlistAppIntentsConfig(existingInfoPlist, options);
+
+  assert.deepEqual(infoPlist.CFBundleURLTypes, [
+    {
+      CFBundleURLName: "com.example.avas",
+      CFBundleTypeRole: "Editor",
+      CFBundleURLSchemes: ["avas-app", "exp+avas-app"],
+    },
+    {
+      CFBundleURLName: "com.example.other",
+      CFBundleURLSchemes: ["other"],
+    },
+  ]);
+});
+
+test("Expo Android scheme helper restores generic scheme filters", () => {
+  const manifest = [
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    "  <application>",
+    '    <activity android:name=".MainActivity" android:launchMode="singleTask">',
+    "      <intent-filter>",
+    '        <action android:name="android.intent.action.MAIN" />',
+    '        <category android:name="android.intent.category.LAUNCHER" />',
+    "      </intent-filter>",
+    "      <intent-filter>",
+    '        <action android:name="android.intent.action.VIEW" />',
+    '        <category android:name="android.intent.category.DEFAULT" />',
+    '        <category android:name="android.intent.category.BROWSABLE" />',
+    '        <data android:scheme="avas-app" android:host="app-intents" />',
+    "      </intent-filter>",
+    "    </activity>",
+    "  </application>",
+    "</manifest>",
+    "",
+  ].join("\n");
+
+  const output = applyAndroidExpoSchemeFilters(manifest, ["avas-app", "exp+avas-app"]);
+
+  assert.match(output, /android:scheme="avas-app" android:host="app-intents"/);
+  assert.match(output, /<data android:scheme="avas-app" \/>/);
+  assert.match(output, /<data android:scheme="exp\+avas-app" \/>/);
+  assert.equal(applyAndroidExpoSchemeFilters(output, ["avas-app", "exp+avas-app"]), output);
 });
 
 test("expo plugin auto-loads app-intents.config.ts by default", async () => {

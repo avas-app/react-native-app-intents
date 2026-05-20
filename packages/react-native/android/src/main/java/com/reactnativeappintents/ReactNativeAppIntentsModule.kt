@@ -273,7 +273,13 @@ class ReactNativeAppIntentsModule(
     private var reactContextRef: WeakReference<ReactApplicationContext>? = null
 
     fun handleIntent(intent: Intent?) {
-      handleUrl(intent?.dataString)
+      val uri = intent?.data ?: return
+
+      if (uri.host != "app-intents") {
+        return
+      }
+
+      handleUrl(uri.toString())
     }
 
     private fun handleUrl(url: String?) {

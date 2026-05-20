@@ -234,3 +234,96 @@ test("generateAppIntents writes bare RN artifacts from intent definitions", asyn
     await rm(cwd, { force: true, recursive: true });
   }
 });
+
+test("generateAppIntents preserves existing Android deep link filters", async () => {
+  const repoRoot = resolve(import.meta.dirname, "../../..");
+  const cwd = await mkdtemp(join(repoRoot, ".tmp-codegen-links-"));
+  const config = defineAppIntentsConfig({
+    intents: ["src/**/*.intents.ts"],
+    scheme: "avas-app",
+    android: {
+      manifest: "android/app/src/main/AndroidManifest.xml",
+      packageName: "com.example.avas",
+      shortcutsOutput: "android/app/src/main/res/xml/app_intents_shortcuts.xml",
+    },
+  });
+
+  try {
+    await mkdir(join(cwd, "src"), { recursive: true });
+    await mkdir(join(cwd, "android/app/src/main"), { recursive: true });
+    await writeFile(
+      join(cwd, "src/orders.intents.ts"),
+      [
+        'import { defineIntent, p } from "@crockalet/react-native-app-intents";',
+        "",
+        "export const openOrder = defineIntent({",
+        '  id: "openOrder",',
+        '  title: "Open Order",',
+        '  phrases: ["Open order ${orderNumber} in ${.applicationName}"],',
+        "  params: {",
+        '    orderNumber: p.string({ default: "1234" }),',
+        "  },",
+        "  surfaces: {",
+        "    appShortcut: true,",
+        "  },",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "android/app/src/main/AndroidManifest.xml"),
+      [
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+        "  <application>",
+        '    <activity android:name=".MainActivity" android:launchMode="singleTask">',
+        "      <intent-filter>",
+        '        <action android:name="android.intent.action.MAIN" />',
+        '        <category android:name="android.intent.category.LAUNCHER" />',
+        "      </intent-filter>",
+        "      <intent-filter>",
+        '        <action android:name="android.intent.action.VIEW" />',
+        '        <category android:name="android.intent.category.DEFAULT" />',
+        '        <category android:name="android.intent.category.BROWSABLE" />',
+        '        <data android:scheme="avas-app" android:host="web" />',
+        "      </intent-filter>",
+        "      <intent-filter>",
+        '        <action android:name="android.intent.action.VIEW" />',
+        '        <category android:name="android.intent.category.DEFAULT" />',
+        '        <category android:name="android.intent.category.BROWSABLE" />',
+        '        <data android:scheme="exp+avas-app" android:host="expo-development-client" />',
+        "      </intent-filter>",
+        "    </activity>",
+        '    <activity android:name=".OtherActivity">',
+        "      <intent-filter>",
+        '        <action android:name="android.intent.action.VIEW" />',
+        '        <category android:name="android.intent.category.DEFAULT" />',
+        '        <category android:name="android.intent.category.BROWSABLE" />',
+        '        <data android:scheme="other" android:host="app-intents" />',
+        "      </intent-filter>",
+        "    </activity>",
+        "  </application>",
+        "</manifest>",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await generateAppIntents(config, { cwd });
+    const generatedManifest = await readFile(
+      join(cwd, "android/app/src/main/AndroidManifest.xml"),
+      "utf8",
+    );
+
+    assert.match(generatedManifest, /android:scheme="avas-app" android:host="web"/);
+    assert.match(
+      generatedManifest,
+      /android:scheme="exp\+avas-app" android:host="expo-development-client"/,
+    );
+    assert.match(generatedManifest, /android:scheme="other" android:host="app-intents"/);
+    assert.match(generatedManifest, /android:scheme="avas-app"[\s\S]*android:host="app-intents"/);
+    assert.equal(generatedManifest.match(/android:host="app-intents"/g)?.length, 2);
+  } finally {
+    await rm(cwd, { force: true, recursive: true });
+  }
+});

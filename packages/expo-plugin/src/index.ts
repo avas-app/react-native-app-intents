@@ -46,6 +46,12 @@ type JSONObject = { [key: string]: JSONValue | undefined };
 type ExpoAppConfig = NativeExpoConfig & { plugins?: unknown[] };
 type ExpoPluginUserConfig = { plugins?: unknown[]; [key: string]: unknown };
 type ResolveExpoPluginOptions = (projectRoot: string) => Promise<AppIntentsConfig>;
+type AndroidActivityMatch = {
+  index: number;
+  openingTag: string;
+  source: string;
+  selfClosing: boolean;
+};
 
 export type AppIntentsPluginEntry = readonly [typeof EXPO_PLUGIN_PACKAGE_NAME, AppIntentsConfig];
 
@@ -273,8 +279,112 @@ function toNativePath(path: string): string {
   return normalized;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function joinNativePath(...segments: string[]): string {
   return toNativePath(join(...segments));
+}
+
+function getExpoSchemes(config: ExpoAppConfig): string[] {
+  const scheme = (config as { scheme?: string | string[] }).scheme;
+  const schemes = Array.isArray(scheme) ? scheme : scheme ? [scheme] : [];
+  return [...new Set(schemes.filter((value) => value.length > 0))];
+}
+
+function findMainActivity(manifest: string): AndroidActivityMatch | null {
+  for (const match of manifest.matchAll(/<activity\b[^>]*(?:\/>|>)/g)) {
+    const openingTag = match[0];
+    const index = match.index;
+
+    if (index === undefined || !openingTag.includes('android:name=".MainActivity"')) {
+      continue;
+    }
+
+    const selfClosing = /\/>\s*$/.test(openingTag);
+
+    if (selfClosing) {
+      return { index, openingTag, source: openingTag, selfClosing };
+    }
+
+    const closeIndex = manifest.indexOf("</activity>", index + openingTag.length);
+
+    if (closeIndex === -1) {
+      return null;
+    }
+
+    return {
+      index,
+      openingTag,
+      source: manifest.slice(index, closeIndex + "</activity>".length),
+      selfClosing,
+    };
+  }
+
+  return null;
+}
+
+function androidTagHasAttribute(tag: string, name: string, value: string): boolean {
+  return new RegExp(`\\bandroid:${name}\\s*=\\s*"${escapeRegExp(value)}"`).test(tag);
+}
+
+function hasGenericSchemeFilter(activitySource: string, scheme: string): boolean {
+  const intentFilters = activitySource.match(/<intent-filter\b[\s\S]*?<\/intent-filter>/g) ?? [];
+
+  return intentFilters.some((intentFilter) => {
+    const dataTags = intentFilter.match(/<data\b[\s\S]*?(?:\/>|><\/data>)/g) ?? [];
+
+    return dataTags.some(
+      (dataTag) =>
+        androidTagHasAttribute(dataTag, "scheme", scheme) && !/\bandroid:host\s*=/.test(dataTag),
+    );
+  });
+}
+
+function renderGenericSchemeFilter(scheme: string): string {
+  return [
+    "        <intent-filter>",
+    '            <action android:name="android.intent.action.VIEW" />',
+    '            <category android:name="android.intent.category.DEFAULT" />',
+    '            <category android:name="android.intent.category.BROWSABLE" />',
+    `            <data android:scheme="${escapeXml(scheme)}" />`,
+    "        </intent-filter>",
+  ].join("\n");
+}
+
+export function applyAndroidExpoSchemeFilters(
+  manifest: string,
+  schemes: readonly string[],
+): string {
+  let updatedManifest = manifest;
+
+  for (const scheme of schemes) {
+    const mainActivity = findMainActivity(updatedManifest);
+
+    if (!mainActivity || hasGenericSchemeFilter(mainActivity.source, scheme)) {
+      continue;
+    }
+
+    const schemeFilter = renderGenericSchemeFilter(scheme);
+    const replacement = mainActivity.selfClosing
+      ? `${mainActivity.openingTag.replace(/\/>\s*$/, ">")}\n${schemeFilter}\n      </activity>`
+      : mainActivity.source.replace("</activity>", `${schemeFilter}\n      </activity>`);
+
+    updatedManifest = `${updatedManifest.slice(0, mainActivity.index)}${replacement}${updatedManifest.slice(
+      mainActivity.index + mainActivity.source.length,
+    )}`;
+  }
+
+  return updatedManifest;
 }
 
 function resolveExpoIOSOutput(options: AppIntentsConfig, iosProjectName: string): string {
@@ -386,6 +496,24 @@ async function patchExpoAppDelegate(projectRoot: string, projectName: string): P
   }
 }
 
+async function patchExpoAndroidSchemeFilters(
+  projectRoot: string,
+  manifestPath: string,
+  schemes: readonly string[],
+): Promise<void> {
+  if (schemes.length === 0) {
+    return;
+  }
+
+  const absoluteManifestPath = join(projectRoot, manifestPath);
+  const source = await readFile(absoluteManifestPath, "utf8");
+  const patched = applyAndroidExpoSchemeFilters(source, schemes);
+
+  if (patched !== source) {
+    await writeFile(absoluteManifestPath, patched, "utf8");
+  }
+}
+
 async function runPlatformCodegen(
   config: ExpoAppConfig,
   options: AppIntentsConfig,
@@ -404,9 +532,15 @@ async function runPlatformCodegen(
     return;
   }
 
-  await generateAppIntents(resolveExpoCodegenConfig(config, options, projectRoot, "android"), {
+  const androidCodegenConfig = resolveExpoCodegenConfig(config, options, projectRoot, "android");
+  await generateAppIntents(androidCodegenConfig, {
     cwd: projectRoot,
   });
+  await patchExpoAndroidSchemeFilters(
+    projectRoot,
+    resolveExpoAndroidManifest(options),
+    getExpoSchemes(config),
+  );
 }
 
 function withGeneratedIOSSource(
