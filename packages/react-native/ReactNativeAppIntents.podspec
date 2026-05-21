@@ -6,12 +6,12 @@ Pod::Spec.new do |spec|
   spec.name = "ReactNativeAppIntents"
   spec.version = package["version"]
   spec.summary = package["description"]
-  spec.homepage = "https://github.com/avasapp/react-native-app-intents"
+  spec.homepage = "https://github.com/avas-app/react-native-app-intents"
   spec.license = package["license"]
   spec.authors = "Copilot"
   spec.platforms = { :ios => "15.1" }
   spec.source = {
-    :git => "https://github.com/avasapp/react-native-app-intents.git",
+    :git => "https://github.com/avas-app/react-native-app-intents.git",
     :tag => "#{spec.version}",
   }
 
