@@ -1,6 +1,6 @@
 {
   "name": "@avasapp/react-native-app-intents",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "React Native runtime, authoring API, codegen, CLI, and Expo plugin for App Intents.",
   "license": "MIT",
   "repository": {

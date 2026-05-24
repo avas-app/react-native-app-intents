@@ -28,6 +28,16 @@ class ReactNativeAppIntentsModule(
   override fun getName(): String = NAME
 
   @ReactMethod
+  fun addListener(eventName: String) {
+    // Required for RN NativeEventEmitter on Android; events emit via RCTDeviceEventEmitter.
+  }
+
+  @ReactMethod
+  fun removeListeners(count: Int) {
+    // Required for RN NativeEventEmitter on Android; events emit via RCTDeviceEventEmitter.
+  }
+
+  @ReactMethod
   fun donate(
     intentId: String,
     title: String,
