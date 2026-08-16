@@ -298,6 +298,66 @@ test("parseIntentUrl ignores unrelated urls", () => {
   assert.equal(parsed, null);
 });
 
+test("parseIntentUrl ignores urls carrying a malformed payload", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      orderNumber: p.string(),
+    },
+  });
+  const context = {
+    scheme: "example",
+    intentsById: new Map([[openOrder.id, openOrder]]),
+  };
+
+  assert.equal(parseIntentUrl(context, "example://app-intents/openOrder?payload=not-json"), null);
+  assert.equal(
+    parseIntentUrl(context, "example://app-intents/openOrder?payload=%5B1%2C2%5D"),
+    null,
+  );
+});
+
+test("runtime ignores foreground urls carrying a malformed payload", async () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      orderNumber: p.string(),
+    },
+  });
+  const linking = createLinkingAdapter(null);
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [openOrder] as const,
+    linking: linking.adapter,
+    nativeModule: {
+      async clearDonations() {},
+      async donate() {},
+      async updateDynamicShortcuts() {},
+    },
+  });
+  const received: string[] = [];
+  const rejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => {
+    rejections.push(reason);
+  };
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  runtime.onIntent(openOrder, ({ orderNumber }) => {
+    received.push(orderNumber);
+  });
+  linking.emit("example://app-intents/openOrder?payload=not-json");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  linking.emit(buildIntentUrl("example", openOrder, { orderNumber: "9876" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  runtime.dispose();
+  process.off("unhandledRejection", onUnhandledRejection);
+
+  assert.deepEqual(rejections, []);
+  assert.deepEqual(received, ["9876"]);
+});
+
 test("runtime serializes and parses entity params", async () => {
   const Order = defineEntity({
     id: "Order",

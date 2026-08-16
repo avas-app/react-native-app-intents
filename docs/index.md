@@ -504,5 +504,5 @@ Pages. In the GitHub repository settings, set **Pages -> Build and deployment ->
 **GitHub Actions**. Push to `main`, then open:
 
 ```text
-https://avasapp.github.io/react-native-app-intents/
+https://avas-app.github.io/react-native-app-intents/
 ```

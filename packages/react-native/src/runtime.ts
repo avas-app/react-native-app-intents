@@ -513,9 +513,17 @@ export function parseIntentUrl<TIntents extends IntentTuple>(
     return null;
   }
 
-  const payload = parsedUrl.payload ? JSON.parse(parsedUrl.payload) : {};
+  let payload: unknown = {};
 
-  if (typeof payload !== "object" || payload === null) {
+  if (parsedUrl.payload) {
+    try {
+      payload = JSON.parse(parsedUrl.payload);
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return null;
   }
 

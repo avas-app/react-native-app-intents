@@ -7,7 +7,7 @@ npm install @avasapp/react-native-app-intents
 ```
 
 Full usage docs are set up for GitHub Pages at:
-`https://avasapp.github.io/react-native-app-intents/`
+`https://avas-app.github.io/react-native-app-intents/`
 
 ## Basic setup
 
