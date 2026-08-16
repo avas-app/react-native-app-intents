@@ -1,8 +1,9 @@
 {
   "name": "@avasapp/react-native-app-intents",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "React Native runtime, authoring API, codegen, CLI, and Expo plugin for App Intents.",
   "license": "MIT",
+  "author": "avas-app",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/avas-app/react-native-app-intents.git",
@@ -21,6 +22,7 @@
     "android/src",
     "ReactNativeAppIntents.podspec",
     "app.plugin.js",
+    "CHANGELOG.md",
     "README.md",
     "docs"
   ],

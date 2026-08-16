@@ -12,11 +12,16 @@ A React Native library for declaring iOS App Intents and Android App Shortcuts f
 
 ## Architecture
 
+Everything ships as one package, `@avasapp/react-native-app-intents`, built from
+`packages/react-native`. The sections below are internal modules exposed as subpath exports, not
+separate packages:
+
 ```
-@your-scope/app-intents
+packages/react-native/src/
 ├── core/                 # defineIntent, defineEntity, schema (p.*)
 ├── codegen/              # TS declarations -> IR -> Swift / XML / Kotlin / .d.ts
-├── react-native/         # bare RN TurboModule + runtime JS API
+├── runtime.ts            # bare RN runtime JS API
+├── native.ts             # native module surface
 ├── expo-plugin/          # optional Expo config plugin (wraps codegen)
 └── cli/                  # `app-intents generate`
 ```
@@ -42,7 +47,7 @@ IntentIR[] (normalized intermediate representation)
 ### `defineIntent`
 
 ```ts
-import { defineIntent, p } from "@your-scope/app-intents";
+import { defineIntent, p } from "@avasapp/react-native-app-intents";
 
 export const openOrder = defineIntent({
   id: "openOrder",
@@ -101,7 +106,7 @@ import {
   getInitialIntent,
   donate,
   updateDynamicShortcuts,
-} from "@your-scope/app-intents/react-native";
+} from "@avasapp/react-native-app-intents";
 ```
 
 - `onIntent(intentDef, handler)` — typed handler, params inferred from def.
@@ -124,7 +129,7 @@ src/
 ```
 
 ```ts name=app-intents.config.ts
-import { defineAppIntentsConfig } from "@your-scope/app-intents/codegen";
+import { defineAppIntentsConfig } from "@avasapp/react-native-app-intents/codegen";
 
 export default defineAppIntentsConfig({
   intents: ["src/**/*.intents.ts"],
@@ -177,7 +182,7 @@ A config plugin wraps the same codegen + applies native patches:
 export default {
   expo: {
     plugins: [
-      ["@your-scope/app-intents/expo", { intents: "src/**/*.intents.ts", scheme: "myapp" }],
+      ["@avasapp/react-native-app-intents", { intents: "src/**/*.intents.ts", scheme: "myapp" }],
     ],
   },
 };
@@ -200,7 +205,7 @@ Plugin emits per-locale `.strings` (iOS) and `values-<lang>/strings.xml` (Androi
 ## Testing
 
 ```ts
-import { __test } from "@your-scope/app-intents/testing";
+import { __test } from "@avasapp/react-native-app-intents/testing";
 
 it("routes openOrder to Order screen", async () => {
   const nav = renderApp();
@@ -221,7 +226,7 @@ it("routes openOrder to Order screen", async () => {
 
 ### M0 — Scaffolding
 
-- Bun workspaces monorepo with `core`, `codegen`, `cli`, `react-native`, `expo-plugin`, `example` packages.
+- Bun workspaces monorepo. The `core`, `codegen`, `cli`, and `expo-plugin` packages were later folded into `packages/react-native`; `example` and the `apps/*` example apps remain separate workspaces.
 - TS build, oxlint, oxfmt, CI.
 
 ### M1 — Core authoring API

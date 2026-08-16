@@ -8,11 +8,11 @@ Pod::Spec.new do |spec|
   spec.summary = package["description"]
   spec.homepage = "https://github.com/avas-app/react-native-app-intents"
   spec.license = package["license"]
-  spec.authors = "Copilot"
+  spec.authors = package["author"]
   spec.platforms = { :ios => "15.1" }
   spec.source = {
     :git => "https://github.com/avas-app/react-native-app-intents.git",
-    :tag => "#{spec.version}",
+    :tag => "v#{spec.version}",
   }
 
   spec.source_files = "ios/**/*.{h,m,mm}"
