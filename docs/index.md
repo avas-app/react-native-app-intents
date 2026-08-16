@@ -130,9 +130,14 @@ export default defineAppIntentsConfig({
     shortcutsOutput: "android/app/src/main/res/xml/app_shortcuts.xml",
     packageName: "com.example.myapp",
   },
+  localization: {
+    defaultLocale: "en",
+  },
   types: { output: "src/generated/app-intents.d.ts" },
 });
 ```
+
+The `localization` block is optional; see [Localization](#localization) for what it controls.
 
 Run codegen:
 
@@ -383,6 +388,116 @@ On iOS this creates an `NSUserActivity` eligible for system predictions and clea
 interactions/user activities. On Android this publishes a removable long-lived shortcut donation and
 clears the shortcut donations created by `donate`.
 
+## Localization
+
+Every user-facing field accepts either a plain string or a locale map. Codegen resolves the default
+locale into the generated native files and emits the other locales as platform string tables.
+
+```ts
+export const openOrder = defineIntent({
+  id: "openOrder",
+  title: { en: "Open Order", fr: "Ouvrir la commande" },
+  description: { en: "Open a specific order.", fr: "Ouvrir une commande." },
+  phrases: {
+    en: ["Open order ${orderNumber} in ${.applicationName}"],
+    fr: ["Ouvrir la commande ${orderNumber} dans ${.applicationName}"],
+  },
+  params: {
+    orderNumber: p.string({
+      title: { en: "Order number", fr: "Numéro de commande" },
+      requestValueDialog: { en: "Which order?", fr: "Quelle commande ?" },
+    }),
+  },
+  surfaces: { appShortcut: true },
+});
+```
+
+Locale maps are accepted on intent `title` and `description`, parameter `title`, `prompt`, and
+`requestValueDialog`, entity `title`, `ios.appIntent.response.dialog`, and `phrases`.
+
+Configure the authoring locale in your config. Everything else is inferred from the definitions:
+
+```ts
+export default defineAppIntentsConfig({
+  intents: ["src/**/*.intents.ts"],
+  scheme: "myapp",
+  localization: {
+    // Locale the definitions are written in. Defaults to "en".
+    defaultLocale: "en",
+    // Where .lproj tables are written. Defaults to the directory holding ios.output.
+    iosResourcesDirectory: "ios/MyApp/Resources",
+  },
+  // ...
+});
+```
+
+### What gets generated
+
+A project that only uses its default locale generates exactly what it did before — plain string
+literals in Swift, one `values/` strings file on Android, and no extra files. As soon as a second
+locale appears anywhere, codegen additionally writes:
+
+| File                                     | Contents                                             |
+| ---------------------------------------- | ---------------------------------------------------- |
+| `<locale>.lproj/AppIntents.strings`      | Intent titles, descriptions, dialogs, parameter text |
+| `<locale>.lproj/AppShortcuts.strings`    | App Shortcut invocation phrases                      |
+| `res/values-<qualifier>/..._strings.xml` | Android shortcut short and long labels               |
+
+Generated Swift switches to keyed `LocalizedStringResource` lookups against the `AppIntents` table,
+keeping the default-locale text inline as the fallback, so the generated source still behaves
+correctly even before the tables are bundled.
+
+Android qualifiers follow the platform's own rules: `fr` becomes `values-fr`, `pt-BR` becomes
+`values-pt-rBR`, and anything with a script subtag uses the BCP 47 form such as `values-b+zh+Hans`.
+
+### Wiring the iOS tables up
+
+Codegen writes the `.lproj` directories but cannot edit your Xcode target. After the first localized
+generate you need to:
+
+1. Add the generated `.lproj` directories to the app target's **Copy Bundle Resources** build phase.
+2. List the locales under `CFBundleLocalizations` in `Info.plist`.
+
+Codegen prints both reminders as diagnostics whenever translations are emitted.
+
+### Rules worth knowing
+
+- **Translated phrases must include `${.applicationName}` themselves.** The default locale gets the
+  app name appended with an English connector when it is missing; there is no language-agnostic
+  equivalent, so codegen rejects a translation that leaves the token out rather than silently
+  producing `Ouvrir la commande in MyApp`.
+- **Phrase lists are matched by position**, so every locale must declare the same number of phrases.
+- **`displayRepresentation` is not localized.** It returns plain strings computed from your data, so
+  entity labels in shortcut inventories use whatever that function returns. Localize inside the
+  function if you need it.
+- A locale that omits a field falls back to the default locale, so partial translations are fine.
+
+### Runtime locale
+
+Donations and dynamic shortcuts create user-facing labels at runtime, so the runtime resolves locale
+maps against the device locale, falling back to the default locale:
+
+```ts
+const appIntents = createAppIntentsRuntime({
+  scheme: "myapp",
+  intents: [openOrder] as const,
+  // Optional. Defaults to the device locale reported by Intl.
+  locale: userSelectedLanguage,
+  defaultLocale: "en",
+});
+
+await appIntents.updateDynamicShortcuts([
+  {
+    intent: openOrder,
+    params: { orderNumber: "1234" },
+    shortTitle: { en: "Open order #1234", fr: "Ouvrir la commande n° 1234" },
+  },
+]);
+```
+
+Pass `locale` explicitly when the app has its own language picker that can differ from the system
+language.
+
 ## Auth-gated apps
 
 For auth-gated or feature-flagged flows, treat donations and dynamic shortcuts as
@@ -431,6 +546,181 @@ async function logout() {
 
 This keeps Siri/App Shortcuts suggestions aligned with the current account state
 instead of exposing stale shortcuts after logout.
+
+## Recipes
+
+### Voice-first actions and dialogs
+
+An intent can either bring the app forward to do the work, or stay in the background and answer with
+a spoken dialog. The two modes behave very differently, and the choice is `behavior.opensAppToForeground`.
+
+**Foreground** is what you want whenever JavaScript has to react to the request:
+
+```ts
+export const startWorkout = defineIntent({
+  id: "startWorkout",
+  title: "Start Workout",
+  phrases: ["Start a workout in ${.applicationName}"],
+  params: {
+    activity: p.string({ optional: true, title: "Activity" }),
+  },
+  surfaces: { appShortcut: true },
+  behavior: { opensAppToForeground: true },
+  ios: { appIntent: {} },
+});
+```
+
+Siri opens the app, the runtime receives the event, and your handler runs immediately.
+
+**Background with a dialog** is for acknowledgements that do not need the UI:
+
+```ts
+export const logWater = defineIntent({
+  id: "logWater",
+  title: "Log Water",
+  phrases: ["Log a glass of water in ${.applicationName}"],
+  params: {},
+  ios: {
+    appIntent: { response: { dialog: "Logged a glass of water." } },
+  },
+});
+```
+
+Be aware of what this actually does: the generated App Intent speaks the dialog and queues the
+request, but it does **not** start your JavaScript. The event is delivered the next time the app
+runs, through `getInitialIntent()` or your `onIntent` handlers. Use this for actions you can replay
+later, and reach for `opensAppToForeground: true` when the work has to happen now. A static dialog
+cannot be combined with `opensAppToForeground`; codegen rejects that combination.
+
+Once a user performs the action in-app, donate it so the system learns to suggest it:
+
+```ts
+await appIntents.donate(logWater, {});
+```
+
+### Deep-link routing
+
+Intents arrive as URLs on the reserved `app-intents` host, which lets them share a scheme with your
+ordinary deep links. The runtime only consumes `myapp://app-intents/...`; everything else flows on to
+React Native `Linking` untouched.
+
+```ts
+import { createAppIntentsRuntime } from "@avasapp/react-native-app-intents";
+import { openOrder, startWorkout } from "./intents";
+
+const appIntents = createAppIntentsRuntime({
+  scheme: "myapp",
+  intents: [openOrder, startWorkout] as const,
+});
+
+export function useAppIntentRouting(navigation: NavigationProp) {
+  useEffect(() => {
+    // Cold launch: the intent that started the app, if any.
+    void appIntents.getInitialIntent().then((event) => {
+      if (event) {
+        route(navigation, event);
+      }
+    });
+
+    // Warm launches and foreground delivery.
+    return appIntents.onAnyIntent((event) => {
+      route(navigation, event);
+    });
+  }, [navigation]);
+}
+
+function route(navigation: NavigationProp, event: GeneratedAppIntentEvent) {
+  switch (event.id) {
+    case "openOrder":
+      // event.params is narrowed to { orderNumber: string }.
+      navigation.navigate("Order", { id: event.params.orderNumber });
+      return;
+    case "startWorkout":
+      navigation.navigate("Workout", { activity: event.params.activity });
+      return;
+  }
+}
+```
+
+`onAnyIntent` gives you a discriminated union, so switching on `event.id` narrows `event.params` to
+that intent's parameter type. `GeneratedAppIntentEvent` comes from the generated `.d.ts` when
+`types.output` is configured.
+
+Two things to keep in mind:
+
+- Register handlers early. Events that arrive before any handler exists are buffered and flushed
+  once one is added, so a late `onIntent` still receives them, but the buffer is per runtime
+  instance — create the runtime once at module scope rather than inside a component.
+- Call `appIntents.buildUrl(intent, params)` when you need the URL yourself, for example to test a
+  flow with `xcrun simctl openurl` or `adb shell am start`.
+
+### Entity disambiguation
+
+When a parameter refers to one of a known set of records, model it as an entity instead of a string.
+Siri can then present a picker rather than asking the user to spell a value out, and Android gets a
+capability inventory it can match against.
+
+```ts
+import { defineEntity, defineIntent, p } from "@avasapp/react-native-app-intents";
+
+const Order = defineEntity({
+  id: "Order",
+  title: "Order",
+  inventory: [
+    { id: 1, number: "1234", customer: "Taylor" },
+    { id: 2, number: "5678", customer: "Sam" },
+  ],
+  schema: p.object({
+    id: p.int(),
+    number: p.string(),
+    customer: p.string(),
+  }),
+  identifier: (order) => String(order.id),
+  displayRepresentation: (order) => ({
+    title: `Order #${order.number}`,
+    subtitle: order.customer,
+    image: { systemName: "bag" },
+  }),
+});
+
+export const openSavedOrder = defineIntent({
+  id: "openSavedOrder",
+  title: "Open Saved Order",
+  phrases: ["Open ${order} in ${.applicationName}"],
+  params: {
+    order: p.entity(Order, {
+      androidBiiParam: "order",
+      title: "Order",
+      requestValueDialog: "Which order?",
+      default: { id: 1, number: "1234", customer: "Taylor" },
+    }),
+  },
+  surfaces: { appShortcut: true },
+  android: { appAction: { capability: "actions.intent.GET_ORDER" } },
+});
+```
+
+What this generates:
+
+- **iOS** — an `AppEntity` plus an `EntityQuery` backed by the static inventory, supporting lookup by
+  identifier, suggested entities, and string search. Saying "Open order" without naming one makes
+  Siri offer the inventory as choices, using `displayRepresentation` for each row.
+- **Android** — one static shortcut per inventory item, each with a `capability-binding` so the
+  capability can resolve a spoken value to a specific record.
+
+Entity placeholders are the one kind that survives into the generated phrase. A `${order}` token
+stays in the Swift phrase as an interpolated parameter, whereas a scalar placeholder like
+`${orderNumber}` is dropped from the phrase text.
+
+Constraints to design around:
+
+- Inventory is **static**, resolved at build time from the `inventory` array. The `query` callback on
+  `defineEntity` is not currently used by codegen or the runtime, so live catalogs are not yet
+  supported. Model dynamic data with `updateDynamicShortcuts` and
+  `android.appAction.inventory.strategy: "dynamic"` instead.
+- An intent that opts into `android.appAction` supports at most one entity parameter, and every
+  parameter must declare `androidBiiParam`.
+- Entity-backed App Shortcuts require a non-empty inventory; codegen fails otherwise.
 
 ## Android App Actions contract
 
@@ -483,6 +773,9 @@ RN_APP_INTENTS_ANDROID_E2E=1 bun test packages/react-native/test/android-app-act
 - Nested object-parameter support in generated iOS App Intents, including generated parameter summaries.
 - Static iOS App Intent dialog responses via `ios.appIntent.response.dialog`.
 - Generated TypeScript event types.
+- Multi-locale titles, descriptions, dialogs, and phrases, emitted as Apple `.strings` tables and
+  Android `values-*/strings.xml` resources.
+- Codegen diagnostics that point at the file and line of the failing declaration.
 - Initial intent and warm intent event handling in JavaScript.
 - Dynamic home-screen shortcuts on iOS and Android.
 - Intent donation and donation-clearing helpers.

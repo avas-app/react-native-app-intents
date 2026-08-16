@@ -4,6 +4,47 @@ All notable changes to this package are documented here.
 
 Entries before 0.2.5 were reconstructed from git history after the fact and may be incomplete.
 
+## Unreleased
+
+### Added
+
+- Localization now reaches the generated native artifacts. Locale maps were already accepted on
+  intent `title` / `description`, parameter `title` / `prompt` / `requestValueDialog`, entity
+  `title`, `ios.appIntent.response.dialog`, and `phrases`, but every locale other than the default
+  was silently discarded during codegen. Codegen now emits `<locale>.lproj/AppIntents.strings` and
+  `<locale>.lproj/AppShortcuts.strings` for iOS, and `res/values-<qualifier>/..._strings.xml` for
+  Android. Android qualifiers follow the platform's own rules, so `pt-BR` becomes `values-pt-rBR`
+  and script subtags use the `values-b+zh+Hans` form.
+- `localization.defaultLocale` (default `"en"`) selects the locale that generated native files are
+  authored in, and `localization.iosResourcesDirectory` overrides where `.lproj` tables are written.
+  Both are also honored by the Expo config plugin.
+- `createAppIntentsRuntime` accepts `locale` and `defaultLocale`. Donations and dynamic shortcuts
+  now resolve locale maps against the device locale rather than always using English, and
+  `DynamicShortcut.shortTitle` / `longTitle` accept locale maps.
+- Codegen diagnostics now carry the file and line of the declaration that failed, for example
+  `src/orders.intents.ts:12:1 [openOrder] Phrase "..." references unknown placeholder "orderId".`
+  `AppIntentsValidationError` exposes the parts separately through a new `details` array; the
+  existing `issues` array keeps working and now includes the location prefix.
+- Failures loading an intent module now name the file and explain that intent modules are evaluated
+  during codegen, and the "no intents found" error lists the patterns and directory it searched.
+
+### Changed
+
+- When a project declares more than one locale, generated Swift routes user-facing text through
+  keyed `LocalizedStringResource` lookups against an `AppIntents` table, keeping the default-locale
+  text inline as the fallback. Projects that use a single locale generate byte-identical output to
+  before.
+- Translated App Shortcut phrases must now include `${.applicationName}` themselves. The default
+  locale still gets the app name appended with an English connector when it is missing, but doing
+  that to a translation produced broken phrases such as `Ouvrir la commande in MyApp`, so codegen
+  rejects it instead. Phrase lists are matched by position, so all locales must declare the same
+  number of phrases.
+
+### Fixed
+
+- Regenerated the bare example app's checked-in `AppShortcuts.swift`, which was stale relative to
+  the parameter-summary and JSON-payload changes that shipped in earlier releases.
+
 ## 0.2.6
 
 ### Fixed

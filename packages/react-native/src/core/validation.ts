@@ -1,6 +1,15 @@
 import { ANDROID_APP_ACTION_CATALOG } from "./android-app-actions.js";
 import type { EntityDefinition, EntityDisplayRepresentation, EntityShape } from "./entity.js";
-import type { AnyParameterDefinition, LocalizedText, ObjectParameterDefinition } from "./schema.js";
+import {
+  DEFAULT_LOCALE,
+  collectLocalizedTextLocales,
+  collectPhraseLocales,
+  normalizeLocaleTag,
+  resolveDefaultPhrases,
+  resolveLocalizedText,
+  resolvePhrasesForLocale,
+} from "./localization.js";
+import type { AnyParameterDefinition, ObjectParameterDefinition } from "./schema.js";
 import type {
   AndroidAppActionFulfillment,
   AndroidAppActionInventoryStrategy,
@@ -14,12 +23,69 @@ import type {
 const APP_NAME_PLACEHOLDER = "${.applicationName}";
 const PLACEHOLDER_PATTERN = /\$\{([^}]+)\}/g;
 
-export class AppIntentsValidationError extends Error {
-  readonly issues: readonly string[];
+/** Points at the declaration a codegen diagnostic came from. */
+export interface AppIntentsSourceLocation {
+  /** Path to the file that declares the intent or entity. */
+  filePath: string;
+  /** 1-based line of the declaration, when it could be located. */
+  line?: number;
+  /** 1-based column of the declaration, when it could be located. */
+  column?: number;
+}
 
-  constructor(issues: readonly string[]) {
+/** A single validation problem, with the declaration it originated from. */
+export interface AppIntentsIssue {
+  /** Human-readable description of the problem. */
+  message: string;
+  /** Intent or entity id the problem belongs to. */
+  scopeId: string;
+  /** Source declaration the problem points at, when known. */
+  location?: AppIntentsSourceLocation;
+}
+
+/** Options shared by the normalization entry points. */
+export interface NormalizeOptions {
+  /** Locale that generated native artifacts are authored in. Defaults to `"en"`. */
+  defaultLocale?: string;
+  /** Source declaration for each intent or entity definition, keyed by object identity. */
+  sourceLocations?: ReadonlyMap<object, AppIntentsSourceLocation>;
+}
+
+/** Formats a source location as the `path:line:column` prefix used in diagnostics. */
+export function formatSourceLocation(location: AppIntentsSourceLocation): string {
+  if (location.line === undefined) {
+    return location.filePath;
+  }
+
+  if (location.column === undefined) {
+    return `${location.filePath}:${location.line}`;
+  }
+
+  return `${location.filePath}:${location.line}:${location.column}`;
+}
+
+/** Formats a single issue as a one-line diagnostic. */
+export function formatIssue(issue: AppIntentsIssue): string {
+  const scope = `[${issue.scopeId}] ${issue.message}`;
+
+  return issue.location ? `${formatSourceLocation(issue.location)} ${scope}` : scope;
+}
+
+export class AppIntentsValidationError extends Error {
+  /** Formatted one-line diagnostics, including source locations when known. */
+  readonly issues: readonly string[];
+  /** Structured diagnostics, for tooling that wants the parts separately. */
+  readonly details: readonly AppIntentsIssue[];
+
+  constructor(details: readonly AppIntentsIssue[] | readonly string[]) {
+    const normalizedDetails: readonly AppIntentsIssue[] = details.map((detail) =>
+      typeof detail === "string" ? { message: detail, scopeId: "app-intents" } : detail,
+    );
+    const issues = normalizedDetails.map((issue) => formatIssue(issue));
+
     super(issues.join("\n"));
     this.name = "AppIntentsValidationError";
+    this.details = normalizedDetails;
     this.issues = issues;
   }
 }
@@ -29,6 +95,11 @@ export interface NormalizedPhraseMetadata {
   placeholders: readonly string[];
   raw: string;
   swiftAppShortcutPhrase: string;
+  /**
+   * Translated forms of this phrase keyed by locale, in the same normalized shape as
+   * `swiftAppShortcutPhrase`. Excludes the default locale.
+   */
+  translations: Readonly<Record<string, string>>;
 }
 
 export interface NormalizedParameterMetadata {
@@ -120,8 +191,27 @@ export interface NormalizedIOSIntentMetadata {
 
 const ANDROID_SHORTCUT_ICON_RESOURCE_PATTERN = /^@(drawable|mipmap)\/[A-Za-z0-9_]+$/;
 
-function appendIssue(issues: string[], scopeId: string, message: string): void {
-  issues.push(`[${scopeId}] ${message}`);
+interface IssueScope {
+  scopeId: string;
+  location?: AppIntentsSourceLocation;
+}
+
+function appendIssue(issues: AppIntentsIssue[], scope: IssueScope, message: string): void {
+  issues.push({
+    message,
+    scopeId: scope.scopeId,
+    ...(scope.location ? { location: scope.location } : {}),
+  });
+}
+
+function getIssueScope(
+  scopeId: string,
+  definition: object,
+  options: NormalizeOptions | undefined,
+): IssueScope {
+  const location = options?.sourceLocations?.get(definition);
+
+  return { scopeId, ...(location ? { location } : {}) };
 }
 
 function collectPhrasePlaceholders(phrase: string): string[] {
@@ -141,7 +231,7 @@ function collectPhrasePlaceholders(phrase: string): string[] {
 function normalizeAppShortcutPhrase(
   rawPhrase: string,
   paramNames: ReadonlySet<string>,
-): NormalizedPhraseMetadata {
+): Omit<NormalizedPhraseMetadata, "translations"> {
   const placeholders = collectPhrasePlaceholders(rawPhrase);
   let appShortcutPhrase = rawPhrase;
   let swiftAppShortcutPhrase = rawPhrase;
@@ -225,17 +315,23 @@ function serializeObjectParameterValue(
 function normalizeParameterMetadata(
   name: string,
   definition: AnyParameterDefinition,
+  defaultLocale: string,
 ): NormalizedParameterMetadata {
+  const localeOptions = { defaultLocale };
   const metadata: NormalizedParameterMetadata = {
     hasDefault: "default" in definition && definition.default !== undefined,
     kind: definition.kind,
     name,
     optional: definition.optional === true,
-    title: resolveLocalizedText(definition.title, name) ?? name,
+    title: resolveLocalizedText(definition.title, name, localeOptions) ?? name,
   };
 
-  const prompt = resolveLocalizedText(definition.prompt);
-  const requestValueDialog = resolveLocalizedText(definition.requestValueDialog);
+  const prompt = resolveLocalizedText(definition.prompt, undefined, localeOptions);
+  const requestValueDialog = resolveLocalizedText(
+    definition.requestValueDialog,
+    undefined,
+    localeOptions,
+  );
 
   if (prompt) {
     metadata.prompt = prompt;
@@ -255,7 +351,7 @@ function normalizeParameterMetadata(
 
   if (definition.kind === "object") {
     metadata.fields = Object.entries(definition.fields).map(([fieldName, field]) =>
-      normalizeParameterMetadata(fieldName, field),
+      normalizeParameterMetadata(fieldName, field, defaultLocale),
     );
   }
 
@@ -266,9 +362,48 @@ function normalizeParameterMetadata(
   return metadata;
 }
 
+function validatePhrasePlaceholders(
+  intent: IntentDefinition<any>,
+  phrase: string,
+  placeholders: readonly string[],
+  paramNames: ReadonlySet<string>,
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
+  locale?: string,
+): void {
+  const localeSuffix = locale ? ` (locale "${locale}")` : "";
+
+  for (const placeholder of placeholders) {
+    if (placeholder === ".applicationName") {
+      continue;
+    }
+
+    if (!paramNames.has(placeholder)) {
+      appendIssue(
+        issues,
+        scope,
+        `Phrase "${phrase}"${localeSuffix} references unknown placeholder "${placeholder}".`,
+      );
+      continue;
+    }
+
+    const parameter = intent.params[placeholder];
+
+    if (parameter?.kind === "object") {
+      appendIssue(
+        issues,
+        scope,
+        `Phrase "${phrase}"${localeSuffix} cannot interpolate object parameter "${placeholder}".`,
+      );
+    }
+  }
+}
+
 function normalizePhrases(
   intent: IntentDefinition<any>,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
+  defaultLocale: string,
 ): readonly NormalizedPhraseMetadata[] {
   const localizedPhrases = intent.phrases;
 
@@ -276,49 +411,85 @@ function normalizePhrases(
     return [];
   }
 
-  const phrases = Array.isArray(localizedPhrases)
-    ? localizedPhrases
-    : ((localizedPhrases as Partial<Record<string, readonly string[]>>).en ??
-      Object.values(localizedPhrases as Partial<Record<string, readonly string[]>>)[0] ??
-      []);
+  const phrases = resolveDefaultPhrases(localizedPhrases, defaultLocale);
   const paramNames = new Set(Object.keys(intent.params));
+  const translationLocales = new Set<string>();
 
-  return (phrases as readonly string[]).map((phrase) => {
-    const metadata = normalizeAppShortcutPhrase(phrase, paramNames);
+  collectPhraseLocales(localizedPhrases, translationLocales);
+  translationLocales.delete(normalizeLocaleTag(defaultLocale));
 
-    for (const placeholder of metadata.placeholders) {
-      if (placeholder === ".applicationName") {
-        continue;
-      }
+  const translationsByLocale = new Map<string, readonly string[]>();
 
-      if (!paramNames.has(placeholder)) {
-        appendIssue(
-          issues,
-          intent.id,
-          `Phrase "${phrase}" references unknown placeholder "${placeholder}".`,
-        );
-        continue;
-      }
+  for (const locale of translationLocales) {
+    const translated = resolvePhrasesForLocale(localizedPhrases, locale);
 
-      const parameter = intent.params[placeholder];
-
-      if (parameter?.kind === "object") {
-        appendIssue(
-          issues,
-          intent.id,
-          `Phrase "${phrase}" cannot interpolate object parameter "${placeholder}".`,
-        );
-      }
+    if (!translated) {
+      continue;
     }
 
-    return metadata;
+    if (translated.length !== phrases.length) {
+      appendIssue(
+        issues,
+        scope,
+        `Locale "${locale}" declares ${translated.length} phrase${
+          translated.length === 1 ? "" : "s"
+        } but the default locale "${normalizeLocaleTag(defaultLocale)}" declares ${phrases.length}. Phrase translations are matched by position, so both lists must be the same length.`,
+      );
+      continue;
+    }
+
+    translationsByLocale.set(locale, translated);
+  }
+
+  return phrases.map((phrase, index) => {
+    const metadata = normalizeAppShortcutPhrase(phrase, paramNames);
+
+    validatePhrasePlaceholders(intent, phrase, metadata.placeholders, paramNames, scope, issues);
+
+    const translations: Record<string, string> = {};
+
+    for (const [locale, translated] of translationsByLocale) {
+      const translatedPhrase = translated[index];
+
+      if (translatedPhrase === undefined) {
+        continue;
+      }
+
+      const translatedMetadata = normalizeAppShortcutPhrase(translatedPhrase, paramNames);
+
+      validatePhrasePlaceholders(
+        intent,
+        translatedPhrase,
+        translatedMetadata.placeholders,
+        paramNames,
+        scope,
+        issues,
+        locale,
+      );
+
+      // The default locale gets the app name appended with an English connector when the author
+      // leaves it out. There is no language-agnostic equivalent, so translations have to place the
+      // token themselves rather than inherit an English preposition.
+      if (!translatedMetadata.placeholders.includes(".applicationName")) {
+        appendIssue(
+          issues,
+          scope,
+          `Phrase "${translatedPhrase}" (locale "${locale}") must include ${APP_NAME_PLACEHOLDER}. Apple requires the app name in every App Shortcut phrase, and it cannot be appended automatically in a locale other than the default one.`,
+        );
+        continue;
+      }
+
+      translations[locale] = translatedMetadata.swiftAppShortcutPhrase;
+    }
+
+    return { ...metadata, translations };
   });
 }
 
 function normalizeAppShortcutMetadata(
   appShortcut: IntentSurfaces["appShortcut"] | undefined,
-  intentId: string,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): NormalizedAppShortcutMetadata {
   const options =
     typeof appShortcut === "object" && appShortcut !== null
@@ -332,7 +503,7 @@ function normalizeAppShortcutMetadata(
     if (!ANDROID_SHORTCUT_ICON_RESOURCE_PATTERN.test(androidResourceName)) {
       appendIssue(
         issues,
-        intentId,
+        scope,
         'App Shortcut androidResourceName must use an "@drawable/..." or "@mipmap/..." resource reference.',
       );
     } else {
@@ -347,7 +518,7 @@ function normalizeAppShortcutMetadata(
   if (!normalized.iconAndroidResourceName && !normalized.iconSystemName && options?.icon) {
     appendIssue(
       issues,
-      intentId,
+      scope,
       "App Shortcut icon must include systemName and/or androidResourceName.",
     );
   }
@@ -368,7 +539,8 @@ function normalizeSurfaces(surfaces: IntentSurfaces | undefined): NormalizedInte
 
 function normalizeAndroidMetadata(
   intent: IntentDefinition<any>,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): NormalizedAndroidIntentMetadata | undefined {
   const appAction = intent.android?.appAction;
   const capabilityName = appAction?.capability ?? intent.androidBii;
@@ -377,7 +549,7 @@ function normalizeAndroidMetadata(
     if (intent.surfaces?.assistant) {
       appendIssue(
         issues,
-        intent.id,
+        scope,
         "surfaces.assistant no longer enables Android App Actions by itself. Configure android.appAction.",
       );
     }
@@ -396,8 +568,9 @@ function normalizeAndroidMetadata(
 
 function normalizeIOSResponseMetadata(
   response: IOSAppIntentResponseOptions | undefined,
+  defaultLocale: string,
 ): NormalizedIOSAppIntentResponseMetadata | undefined {
-  const dialog = resolveLocalizedText(response?.dialog);
+  const dialog = resolveLocalizedText(response?.dialog, undefined, { defaultLocale });
 
   if (!dialog) {
     return undefined;
@@ -410,7 +583,9 @@ function normalizeIOSResponseMetadata(
 
 function normalizeIOSMetadata(
   intent: IntentDefinition<any>,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
+  defaultLocale: string,
 ): NormalizedIOSIntentMetadata | undefined {
   const appIntent = intent.ios?.appIntent;
 
@@ -418,7 +593,7 @@ function normalizeIOSMetadata(
     if (intent.surfaces?.siri) {
       appendIssue(
         issues,
-        intent.id,
+        scope,
         "surfaces.siri no longer enables iOS App Intents by itself. Configure ios.appIntent.",
       );
     }
@@ -426,12 +601,12 @@ function normalizeIOSMetadata(
     return undefined;
   }
 
-  const response = normalizeIOSResponseMetadata(appIntent.response);
+  const response = normalizeIOSResponseMetadata(appIntent.response, defaultLocale);
 
   if (response?.dialog && intent.behavior?.opensAppToForeground === true) {
     appendIssue(
       issues,
-      intent.id,
+      scope,
       "ios.appIntent.response.dialog cannot be combined with behavior.opensAppToForeground.",
     );
   }
@@ -445,7 +620,8 @@ function validateAndroidAppAction(
   intent: IntentDefinition<any>,
   params: readonly AnyParameterDefinition[],
   android: NormalizedAndroidIntentMetadata["appAction"],
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): void {
   if (!android) {
     return;
@@ -454,7 +630,7 @@ function validateAndroidAppAction(
   if (!android.capabilityName.startsWith("actions.intent.")) {
     appendIssue(
       issues,
-      intent.id,
+      scope,
       `Android App Actions capability "${android.capabilityName}" must start with "actions.intent.".`,
     );
     return;
@@ -478,7 +654,7 @@ function validateAndroidAppAction(
     if (!supportedParameterNames.has(parameterName)) {
       appendIssue(
         issues,
-        intent.id,
+        scope,
         `Android App Actions capability "${android.capabilityName}" does not support parameter "${parameterName}".`,
       );
     }
@@ -488,7 +664,7 @@ function validateAndroidAppAction(
     if (!configuredParameterNames.has(parameterName)) {
       appendIssue(
         issues,
-        intent.id,
+        scope,
         `Android App Actions capability "${android.capabilityName}" requires parameter "${parameterName}".`,
       );
     }
@@ -505,7 +681,8 @@ function normalizeEntityDisplayRepresentation(
   entity: EntityDefinition<any>,
   item: EntityShape<EntityDefinition<any>>,
   index: number,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): EntityDisplayRepresentation | null {
   try {
     const displayRepresentation = entity.displayRepresentation(item);
@@ -513,13 +690,13 @@ function normalizeEntityDisplayRepresentation(
     if (displayRepresentation.image?.uri) {
       appendIssue(
         issues,
-        entity.id,
+        scope,
         `Inventory item ${index} uses image.uri, which codegen does not support yet.`,
       );
     }
 
     if (!displayRepresentation.title) {
-      appendIssue(issues, entity.id, `Inventory item ${index} must provide a display title.`);
+      appendIssue(issues, scope, `Inventory item ${index} must provide a display title.`);
       return null;
     }
 
@@ -527,7 +704,7 @@ function normalizeEntityDisplayRepresentation(
   } catch (error) {
     appendIssue(
       issues,
-      entity.id,
+      scope,
       `displayRepresentation() threw for inventory item ${index}: ${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -540,13 +717,14 @@ function normalizeEntityIdentifier(
   entity: EntityDefinition<any>,
   item: EntityShape<EntityDefinition<any>>,
   index: number,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): string | null {
   try {
     const identifier = entity.identifier(item);
 
     if (typeof identifier !== "string" || identifier.length === 0) {
-      appendIssue(issues, entity.id, `Inventory item ${index} produced an invalid identifier.`);
+      appendIssue(issues, scope, `Inventory item ${index} produced an invalid identifier.`);
       return null;
     }
 
@@ -554,7 +732,7 @@ function normalizeEntityIdentifier(
   } catch (error) {
     appendIssue(
       issues,
-      entity.id,
+      scope,
       `identifier() threw for inventory item ${index}: ${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -563,39 +741,22 @@ function normalizeEntityIdentifier(
   }
 }
 
-export function resolveLocalizedText(
-  value: LocalizedText | undefined,
-  fallback?: string,
-): string | undefined {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if ("en" in value && typeof value.en === "string") {
-    return value.en;
-  }
-
-  const firstEntry = Object.values(value)[0];
-
-  return typeof firstEntry === "string" ? firstEntry : fallback;
-}
-
 export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>(
   entity: TEntity,
+  options: NormalizeOptions = {},
 ): NormalizedEntityMetadata<TEntity> {
-  const issues: string[] = [];
+  const issues: AppIntentsIssue[] = [];
+  const scope = getIssueScope(entity.id, entity, options);
+  const defaultLocale = options.defaultLocale ?? DEFAULT_LOCALE;
   const seenIdentifiers = new Set<string>();
   const inventory = ((entity.inventory ?? []) as readonly EntityShape<TEntity>[]).flatMap(
     (item, index): NormalizedEntityInventoryItem<TEntity>[] => {
-      const identifier = normalizeEntityIdentifier(entity, item, index, issues);
+      const identifier = normalizeEntityIdentifier(entity, item, index, scope, issues);
       const displayRepresentation = normalizeEntityDisplayRepresentation(
         entity,
         item,
         index,
+        scope,
         issues,
       );
 
@@ -604,7 +765,7 @@ export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>
       }
 
       if (seenIdentifiers.has(identifier)) {
-        appendIssue(issues, entity.id, `Duplicate inventory identifier "${identifier}".`);
+        appendIssue(issues, scope, `Duplicate inventory identifier "${identifier}".`);
         return [];
       }
 
@@ -644,19 +805,20 @@ export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>
     id: entity.id,
     inventory,
     schema: entity.schema,
-    title: resolveLocalizedText(entity.title, entity.id) ?? entity.id,
+    title: resolveLocalizedText(entity.title, entity.id, { defaultLocale }) ?? entity.id,
   };
 }
 
 function collectReferencedEntitiesFromParameter(
   definition: AnyParameterDefinition,
   entitiesById: Map<string, EntityDefinition<any>>,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
   stack: readonly string[] = [],
 ): void {
   if (definition.kind === "object") {
     for (const field of Object.values(definition.fields)) {
-      collectReferencedEntitiesFromParameter(field, entitiesById, issues, stack);
+      collectReferencedEntitiesFromParameter(field, entitiesById, scope, issues, stack);
     }
 
     return;
@@ -667,17 +829,18 @@ function collectReferencedEntitiesFromParameter(
   }
 
   const entity = definition.entity;
+  const entityScope: IssueScope = { ...scope, scopeId: entity.id };
   const existing = entitiesById.get(entity.id);
 
   if (existing && existing !== entity) {
-    appendIssue(issues, entity.id, "Duplicate entity id detected across referenced definitions.");
+    appendIssue(issues, entityScope, "Duplicate entity id detected across referenced definitions.");
     return;
   }
 
   if (stack.includes(entity.id)) {
     appendIssue(
       issues,
-      entity.id,
+      entityScope,
       `Entity schema references itself recursively through ${[...stack, entity.id].join(" -> ")}.`,
     );
     return;
@@ -690,7 +853,7 @@ function collectReferencedEntitiesFromParameter(
   const nextStack = [...stack, entity.id];
 
   for (const field of Object.values(entity.schema.fields) as AnyParameterDefinition[]) {
-    collectReferencedEntitiesFromParameter(field, entitiesById, issues, nextStack);
+    collectReferencedEntitiesFromParameter(field, entitiesById, scope, issues, nextStack);
   }
 }
 
@@ -698,7 +861,8 @@ function validateIntentEntities(
   intent: IntentDefinition<any>,
   surfaces: Required<IntentSurfaces>,
   android: NormalizedAndroidIntentMetadata | undefined,
-  issues: string[],
+  scope: IssueScope,
+  issues: AppIntentsIssue[],
 ): void {
   const params = Object.values(intent.params) as AnyParameterDefinition[];
   const entityParams = params.filter(
@@ -711,7 +875,7 @@ function validateIntentEntities(
       if (!definition.entity.inventory || definition.entity.inventory.length === 0) {
         appendIssue(
           issues,
-          intent.id,
+          scope,
           `Entity parameter "${definition.entity.id}" needs static inventory for App Shortcut codegen.`,
         );
       }
@@ -722,12 +886,12 @@ function validateIntentEntities(
     return;
   }
 
-  validateAndroidAppAction(intent, params, android.appAction, issues);
+  validateAndroidAppAction(intent, params, android.appAction, scope, issues);
 
   if (entityParams.length > 1) {
     appendIssue(
       issues,
-      intent.id,
+      scope,
       "Android BII codegen currently supports at most one entity parameter per intent.",
     );
   }
@@ -739,7 +903,7 @@ function validateIntentEntities(
     if (!definition.androidBiiParam) {
       appendIssue(
         issues,
-        intent.id,
+        scope,
         `Parameter "${paramName}" must declare androidBiiParam when android.appAction is configured.`,
       );
     }
@@ -748,7 +912,7 @@ function validateIntentEntities(
       if (!definition.entity.inventory || definition.entity.inventory.length === 0) {
         appendIssue(
           issues,
-          intent.id,
+          scope,
           `Entity parameter "${paramName}" needs static inventory for Android capability generation.`,
         );
       }
@@ -758,14 +922,17 @@ function validateIntentEntities(
 
 export function normalizeIntentDefinition<TIntent extends IntentDefinition<any>>(
   intent: TIntent,
+  options: NormalizeOptions = {},
 ): NormalizedIntentMetadata<TIntent> {
-  const issues: string[] = [];
+  const issues: AppIntentsIssue[] = [];
+  const scope = getIssueScope(intent.id, intent, options);
+  const defaultLocale = options.defaultLocale ?? DEFAULT_LOCALE;
   const params = (Object.entries(intent.params) as [string, AnyParameterDefinition][]).map(
-    ([name, definition]) => normalizeParameterMetadata(name, definition),
+    ([name, definition]) => normalizeParameterMetadata(name, definition, defaultLocale),
   );
-  const phrases = normalizePhrases(intent, issues);
-  const android = normalizeAndroidMetadata(intent, issues);
-  const ios = normalizeIOSMetadata(intent, issues);
+  const phrases = normalizePhrases(intent, scope, issues, defaultLocale);
+  const android = normalizeAndroidMetadata(intent, scope, issues);
+  const ios = normalizeIOSMetadata(intent, scope, issues, defaultLocale);
   const surfaces = normalizeSurfaces(intent.surfaces);
 
   if (android?.appAction) {
@@ -777,10 +944,10 @@ export function normalizeIntentDefinition<TIntent extends IntentDefinition<any>>
   }
 
   if (surfaces.appShortcut && phrases.length === 0) {
-    appendIssue(issues, intent.id, "App Shortcut intents must declare at least one phrase.");
+    appendIssue(issues, scope, "App Shortcut intents must declare at least one phrase.");
   }
 
-  validateIntentEntities(intent, surfaces, android, issues);
+  validateIntentEntities(intent, surfaces, android, scope, issues);
 
   if (issues.length > 0) {
     throw new AppIntentsValidationError(issues);
@@ -789,7 +956,7 @@ export function normalizeIntentDefinition<TIntent extends IntentDefinition<any>>
   const normalized: Omit<NormalizedIntentMetadata<TIntent>, "description"> & {
     description?: string;
   } = {
-    appShortcut: normalizeAppShortcutMetadata(intent.surfaces?.appShortcut, intent.id, issues),
+    appShortcut: normalizeAppShortcutMetadata(intent.surfaces?.appShortcut, scope, issues),
     ...(android ? { android } : {}),
     behavior: normalizeBehavior(intent.behavior),
     id: intent.id,
@@ -798,12 +965,16 @@ export function normalizeIntentDefinition<TIntent extends IntentDefinition<any>>
     params,
     phrases,
     surfaces,
-    title: resolveLocalizedText(intent.title, intent.id) ?? intent.id,
+    title: resolveLocalizedText(intent.title, intent.id, { defaultLocale }) ?? intent.id,
   };
-  const description = resolveLocalizedText(intent.description);
+  const description = resolveLocalizedText(intent.description, undefined, { defaultLocale });
 
   if (description) {
     normalized.description = description;
+  }
+
+  if (issues.length > 0) {
+    throw new AppIntentsValidationError(issues);
   }
 
   return normalized as NormalizedIntentMetadata<TIntent>;
@@ -811,24 +982,27 @@ export function normalizeIntentDefinition<TIntent extends IntentDefinition<any>>
 
 export function normalizeIntentDefinitions<TIntents extends readonly IntentDefinition<any>[]>(
   intents: TIntents,
+  options: NormalizeOptions = {},
 ): readonly NormalizedIntentMetadata<TIntents[number]>[] {
-  const normalized = intents.map((intent) => normalizeIntentDefinition(intent));
+  const normalized = intents.map((intent) => normalizeIntentDefinition(intent, options));
   const seenIds = new Set<string>();
-  const duplicateIds: string[] = [];
+  const duplicateIssues: AppIntentsIssue[] = [];
 
   for (const intent of normalized) {
     if (seenIds.has(intent.id)) {
-      duplicateIds.push(intent.id);
+      appendIssue(
+        duplicateIssues,
+        getIssueScope(intent.id, intent.intent, options),
+        `Duplicate intent id "${intent.id}".`,
+      );
       continue;
     }
 
     seenIds.add(intent.id);
   }
 
-  if (duplicateIds.length > 0) {
-    throw new AppIntentsValidationError(
-      duplicateIds.map((intentId) => `Duplicate intent id "${intentId}".`),
-    );
+  if (duplicateIssues.length > 0) {
+    throw new AppIntentsValidationError(duplicateIssues);
   }
 
   return normalized;
@@ -836,13 +1010,25 @@ export function normalizeIntentDefinitions<TIntents extends readonly IntentDefin
 
 export function normalizeReferencedEntities<TIntents extends readonly IntentDefinition<any>[]>(
   intents: TIntents,
+  options: NormalizeOptions = {},
 ): readonly NormalizedEntityMetadata[] {
   const entitiesById = new Map<string, EntityDefinition<any>>();
-  const issues: string[] = [];
+  const entityScopes = new Map<string, IssueScope>();
+  const issues: AppIntentsIssue[] = [];
 
   for (const intent of intents) {
+    const scope = getIssueScope(intent.id, intent, options);
+
     for (const definition of Object.values(intent.params) as AnyParameterDefinition[]) {
-      collectReferencedEntitiesFromParameter(definition, entitiesById, issues);
+      const before = new Set(entitiesById.keys());
+
+      collectReferencedEntitiesFromParameter(definition, entitiesById, scope, issues);
+
+      for (const entityId of entitiesById.keys()) {
+        if (!before.has(entityId)) {
+          entityScopes.set(entityId, { ...scope, scopeId: entityId });
+        }
+      }
     }
   }
 
@@ -850,5 +1036,71 @@ export function normalizeReferencedEntities<TIntents extends readonly IntentDefi
     throw new AppIntentsValidationError(issues);
   }
 
-  return [...entitiesById.values()].map((entity) => normalizeEntityDefinition(entity));
+  return [...entitiesById.values()].map((entity) => {
+    const scope = entityScopes.get(entity.id);
+    const sourceLocations = new Map(options.sourceLocations ?? []);
+
+    if (scope?.location && !sourceLocations.has(entity)) {
+      sourceLocations.set(entity, scope.location);
+    }
+
+    return normalizeEntityDefinition(entity, { ...options, sourceLocations });
+  });
+}
+
+/**
+ * Collects every locale referenced by the localized fields of the given intents.
+ *
+ * The result always includes `defaultLocale`, and is sorted with the default locale first so
+ * generated artifacts have a stable order.
+ */
+export function collectProjectLocales(
+  intents: readonly IntentDefinition<any>[],
+  options: NormalizeOptions = {},
+): readonly string[] {
+  const defaultLocale = normalizeLocaleTag(options.defaultLocale ?? DEFAULT_LOCALE);
+  const locales = new Set<string>();
+  const visitedEntities = new Set<EntityDefinition<any>>();
+
+  function visitParameter(definition: AnyParameterDefinition): void {
+    collectLocalizedTextLocales(definition.title, locales);
+    collectLocalizedTextLocales(definition.prompt, locales);
+    collectLocalizedTextLocales(definition.requestValueDialog, locales);
+
+    if (definition.kind === "object") {
+      for (const field of Object.values(definition.fields) as AnyParameterDefinition[]) {
+        visitParameter(field);
+      }
+
+      return;
+    }
+
+    if (definition.kind !== "entity" || visitedEntities.has(definition.entity)) {
+      return;
+    }
+
+    visitedEntities.add(definition.entity);
+    collectLocalizedTextLocales(definition.entity.title, locales);
+
+    for (const field of Object.values(
+      definition.entity.schema.fields,
+    ) as AnyParameterDefinition[]) {
+      visitParameter(field);
+    }
+  }
+
+  for (const intent of intents) {
+    collectLocalizedTextLocales(intent.title, locales);
+    collectLocalizedTextLocales(intent.description, locales);
+    collectLocalizedTextLocales(intent.ios?.appIntent?.response?.dialog, locales);
+    collectPhraseLocales(intent.phrases, locales);
+
+    for (const definition of Object.values(intent.params) as AnyParameterDefinition[]) {
+      visitParameter(definition);
+    }
+  }
+
+  locales.delete(defaultLocale);
+
+  return [defaultLocale, ...[...locales].sort()];
 }

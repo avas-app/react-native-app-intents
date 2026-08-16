@@ -2,8 +2,10 @@ import type {
   AnyParameterDefinition,
   DynamicShortcutIcon,
   IntentDefinition,
+  LocalizedText,
   ParamsOf,
 } from "./core/index.js";
+import { resolveLocalizedText } from "./core/localization.js";
 import type {
   AppIntentsNativeModule,
   NativeShortcutCapabilityBinding,
@@ -32,8 +34,10 @@ export interface DynamicShortcut<TIntent extends IntentDefinition<any> = IntentD
   icon?: DynamicShortcutIcon;
   intent: TIntent;
   params: ParamsOf<TIntent>;
-  shortTitle?: string;
-  longTitle?: string;
+  /** Short shortcut label. Accepts a locale map, resolved against the runtime locale. */
+  shortTitle?: LocalizedText;
+  /** Long shortcut label. Accepts a locale map, resolved against the runtime locale. */
+  longTitle?: LocalizedText;
 }
 
 export interface LinkingAdapter {
@@ -46,6 +50,15 @@ export interface CreateAppIntentsRuntimeOptions<TIntents extends IntentTuple> {
   intents: TIntents;
   linking?: LinkingAdapter;
   nativeModule?: AppIntentsNativeModule;
+  /**
+   * Locale used to resolve localized titles for donations and dynamic shortcuts.
+   *
+   * Defaults to the device locale reported by `Intl` when it is available. Pass this explicitly
+   * when the app has its own language picker that can differ from the system language.
+   */
+  locale?: string;
+  /** Locale that localized values fall back to. Defaults to `"en"`. */
+  defaultLocale?: string;
 }
 
 const INITIAL_NATIVE_URL_POLL_ATTEMPTS = 240;
@@ -205,25 +218,15 @@ function getNativeModule(): AppIntentsNativeModule {
   );
 }
 
-function resolveLocalizedText(
-  value: string | Record<string, string> | undefined,
-  fallback: string,
-): string {
-  if (!value) {
-    return fallback;
+function detectDeviceLocale(): string | undefined {
+  try {
+    const intl = (globalThis as { Intl?: typeof Intl }).Intl;
+    const resolved = intl?.DateTimeFormat?.().resolvedOptions?.().locale;
+
+    return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
   }
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if ("en" in value && typeof value.en === "string") {
-    return value.en;
-  }
-
-  const firstEntry = Object.values(value)[0];
-
-  return typeof firstEntry === "string" ? firstEntry : fallback;
 }
 
 function serializeParameterValue(definition: AnyParameterDefinition, value: unknown): unknown {
@@ -561,6 +564,15 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
     scheme: options.scheme,
     intentsById: new Map(options.intents.map((intent) => [intent.id, intent])),
   };
+  const resolvedLocale = options.locale ?? detectDeviceLocale();
+  const localeOptions = {
+    ...(resolvedLocale ? { locale: resolvedLocale } : {}),
+    ...(options.defaultLocale ? { defaultLocale: options.defaultLocale } : {}),
+  };
+
+  function localize(value: LocalizedText | undefined, fallback: string): string {
+    return resolveLocalizedText(value, fallback, localeOptions) ?? fallback;
+  }
 
   const anyIntentHandlers = new Set<(event: IntentEventUnion<TIntents>) => MaybePromise>();
   const intentHandlers = new Map<
@@ -678,7 +690,7 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
 
       await nativeModule.donate(
         intent.id,
-        resolveLocalizedText(intent.title, intent.id),
+        localize(intent.title, intent.id),
         buildIntentUrl(options.scheme, intent, params),
         JSON.stringify(serializedParams),
         capabilityBindings,
@@ -741,13 +753,15 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
         const payload: NativeShortcutPayload = {
           capabilityBindings: getAndroidCapabilityBindings(shortcut.intent, shortcut.params),
           id: shortcut.id ?? shortcut.intent.id,
-          title:
-            shortcut.shortTitle ?? resolveLocalizedText(shortcut.intent.title, shortcut.intent.id),
+          title: localize(
+            shortcut.shortTitle ?? shortcut.intent.title,
+            localize(shortcut.intent.title, shortcut.intent.id),
+          ),
           url: buildIntentUrl(options.scheme, shortcut.intent, shortcut.params),
         };
 
         if (shortcut.longTitle) {
-          payload.subtitle = shortcut.longTitle;
+          payload.subtitle = localize(shortcut.longTitle, "");
         }
 
         if (shortcut.icon?.systemName) {

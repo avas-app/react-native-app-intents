@@ -195,12 +195,14 @@ The plugin runs codegen during prebuild and patches `Info.plist` / `AndroidManif
 ```ts
 title: { en: "Open Order", fr: "Ouvrir la commande" },
 phrases: {
-  en: ["Open order ${orderNumber}"],
-  fr: ["Ouvrir la commande ${orderNumber}"],
+  en: ["Open order ${orderNumber} in ${.applicationName}"],
+  fr: ["Ouvrir la commande ${orderNumber} dans ${.applicationName}"],
 },
 ```
 
-Plugin emits per-locale `.strings` (iOS) and `values-<lang>/strings.xml` (Android).
+Codegen emits per-locale `.strings` (iOS) and `values-<qualifier>/strings.xml` (Android). Translated
+phrases must carry `${.applicationName}` themselves, and phrase lists are matched by position across
+locales.
 
 ## Testing
 
@@ -262,9 +264,22 @@ it("routes openOrder to Order screen", async () => {
 
 ### M6 — Localization + polish
 
-- Multi-locale phrases/titles, `.strings` / `values-*/strings.xml` emission.
-- Better error messages from codegen (file/line for invalid declarations).
-- Docs site with recipes (push-to-talk, deep-link routing, entity disambiguation).
+Shipped.
+
+- Multi-locale phrases/titles, `.strings` / `values-*/strings.xml` emission. Locale maps were
+  already accepted by the authoring API but were collapsed to a single string during codegen;
+  they now reach the generated artifacts. iOS gets `<locale>.lproj/AppIntents.strings` plus
+  `<locale>.lproj/AppShortcuts.strings` for invocation phrases, and Android gets
+  `res/values-<qualifier>/..._strings.xml`. Configured via `localization.defaultLocale` and
+  `localization.iosResourcesDirectory`. Single-locale projects generate unchanged output.
+- Better error messages from codegen (file/line for invalid declarations). Diagnostics are now
+  `path:line:column [scopeId] message`; `AppIntentsValidationError` also exposes structured
+  `details`. Module load failures and empty glob matches explain themselves.
+- Docs site with recipes (voice-first actions and dialogs, deep-link routing, entity
+  disambiguation), plus a full localization guide.
+
+Deliberately out of scope: `displayRepresentation` still returns plain strings rather than
+localized text, because it is a user-supplied function over app data. Localize inside it if needed.
 
 ### M7 — v1.0
 

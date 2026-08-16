@@ -3,17 +3,31 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 
 import { loadModule } from "@expo/require-utils";
 import {
+  DEFAULT_LOCALE,
+  collectProjectLocales,
   normalizeIntentDefinitions,
+  normalizeLocaleTag,
   normalizeReferencedEntities,
+  renderAppleStringsFile,
   resolveLocalizedText,
+  toAndroidValuesQualifier,
+  toAppleLprojDirectoryName,
   type AnyParameterDefinition,
+  type AppIntentsSourceLocation,
+  type AppleStringsEntry,
   type IntentDefinition,
+  type LocalizedText,
   type NormalizedEntityMetadata,
   type NormalizedIntentMetadata,
   type ObjectParameterDefinition,
 } from "../core/index.js";
 
 import type { AppIntentsConfig } from "./config.js";
+
+/** Apple `.strings` table holding generated intent titles, descriptions, and dialogs. */
+const IOS_STRINGS_TABLE_NAME = "AppIntents";
+/** Apple requires App Shortcut invocation phrases to live in this table specifically. */
+const IOS_APP_SHORTCUTS_STRINGS_TABLE_NAME = "AppShortcuts";
 
 export interface GeneratedArtifact {
   platform: "ios" | "android" | "types";
@@ -37,6 +51,7 @@ interface LoadedIntentSource {
   exportName: string;
   importKind: "default" | "named";
   intent: IntentDefinition<any>;
+  location: AppIntentsSourceLocation;
 }
 
 interface RenderedArtifacts {
@@ -176,6 +191,48 @@ function isIntentDefinition(value: unknown): value is IntentDefinition<any> {
   );
 }
 
+/** Converts a 0-based string offset into a 1-based line and column pair. */
+function toLineAndColumn(source: string, offset: number): { line: number; column: number } {
+  const precedingText = source.slice(0, offset);
+  const lineBreaks = precedingText.split("\n");
+  const line = lineBreaks.length;
+  const column = (lineBreaks.at(-1)?.length ?? 0) + 1;
+
+  return { line, column };
+}
+
+/**
+ * Locates the declaration of an exported binding so diagnostics can point at a real line.
+ *
+ * This deliberately uses simple pattern matching rather than a parser: the codegen already
+ * evaluates the module to read its exports, so this only needs to find where the developer wrote
+ * the declaration in order to make an error message actionable.
+ */
+function findExportLocation(
+  source: string,
+  exportName: string,
+): { line: number; column: number } | undefined {
+  const escapedName = escapeRegExp(exportName);
+  const patterns =
+    exportName === "default"
+      ? [/\bexport\s+default\b/]
+      : [
+          new RegExp(`\\bexport\\s+(?:const|let|var|function|class)\\s+${escapedName}\\b`),
+          new RegExp(`\\bexport\\s+(?:async\\s+)?function\\s+${escapedName}\\b`),
+          new RegExp(`\\b(?:const|let|var|function|class)\\s+${escapedName}\\b`),
+        ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(source);
+
+    if (match?.index !== undefined) {
+      return toLineAndColumn(source, match.index);
+    }
+  }
+
+  return undefined;
+}
+
 async function loadIntentSources(
   patterns: readonly string[],
   cwd: string,
@@ -184,24 +241,43 @@ async function loadIntentSources(
   const loaded: LoadedIntentSource[] = [];
 
   for (const modulePath of modulePaths) {
-    const moduleExports = await loadModule(modulePath);
+    const displayPath = relative(cwd, modulePath).replaceAll("\\", "/") || modulePath;
+    let moduleExports: Record<string, unknown>;
+
+    try {
+      moduleExports = (await loadModule(modulePath)) as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(
+        `Failed to load intent module ${displayPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }\nIntent modules are evaluated during codegen, so they must not import React Native or run side effects at module scope.`,
+        { cause: error },
+      );
+    }
+
+    const moduleSource = (await readExistingFile(modulePath)) ?? "";
 
     for (const [exportName, value] of Object.entries(moduleExports)) {
       if (!isIntentDefinition(value)) {
         continue;
       }
 
+      const position = findExportLocation(moduleSource, exportName);
+
       loaded.push({
         absolutePath: modulePath,
         exportName,
         importKind: exportName === "default" ? "default" : "named",
         intent: value,
+        location: { filePath: displayPath, ...position },
       });
     }
   }
 
   if (loaded.length === 0) {
-    throw new Error("No intent definitions were found for the configured patterns.");
+    throw new Error(
+      `No intent definitions were found for the configured patterns (${patterns.join(", ")}) under ${cwd}.\nCheck that the "intents" globs in your app-intents config match files that export defineIntent(...) values.`,
+    );
   }
 
   return loaded;
@@ -226,6 +302,102 @@ function escapeXml(value: string): string {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+interface LocalizableStringRecord {
+  comment: string;
+  defaultValue: string;
+  key: string;
+  values: Record<string, string>;
+}
+
+/**
+ * Collects the user-facing strings emitted into generated Swift so they can also be written out as
+ * Apple `.strings` tables.
+ *
+ * When a project only uses its default locale the table stays inert and the Swift generator keeps
+ * emitting plain string literals, so single-locale projects see no change in generated output.
+ */
+class LocalizableStringTable {
+  /** Whether the project declares locales beyond the default one. */
+  readonly localized: boolean;
+
+  private readonly records = new Map<string, LocalizableStringRecord>();
+
+  constructor(
+    readonly locales: readonly string[],
+    private readonly defaultLocale: string,
+  ) {
+    this.localized = locales.length > 1;
+  }
+
+  /**
+   * Records a translatable string and returns the value for the default locale.
+   *
+   * The same key registered twice must resolve to the same text; codegen keys are derived from
+   * intent and parameter ids, so a collision means two declarations share an id.
+   */
+  register(
+    key: string,
+    source: LocalizedText | undefined,
+    fallback: string,
+    comment: string,
+  ): string {
+    const defaultValue =
+      resolveLocalizedText(source, fallback, { defaultLocale: this.defaultLocale }) ?? fallback;
+
+    // A missing source means the value is a derived fallback such as a parameter name. Those are
+    // not authored text, so they stay out of the translation tables.
+    if (!this.localized || source === undefined) {
+      return defaultValue;
+    }
+
+    const values: Record<string, string> = {};
+
+    for (const locale of this.locales) {
+      values[locale] =
+        resolveLocalizedText(source, defaultValue, {
+          locale,
+          defaultLocale: this.defaultLocale,
+        }) ?? defaultValue;
+    }
+
+    this.records.set(key, { comment, defaultValue, key, values });
+
+    return defaultValue;
+  }
+
+  /**
+   * Renders a Swift expression for a registered string.
+   *
+   * Single-locale projects get a plain literal; localized projects get a keyed
+   * `LocalizedStringResource` that falls back to the default value when no table is bundled.
+   */
+  swiftExpression(
+    key: string,
+    source: LocalizedText | undefined,
+    fallback: string,
+    comment: string,
+  ): string {
+    const defaultValue = this.register(key, source, fallback, comment);
+
+    if (!this.localized || source === undefined) {
+      return `"${escapeSwiftString(defaultValue)}"`;
+    }
+
+    return `LocalizedStringResource("${escapeSwiftString(key)}", defaultValue: "${escapeSwiftString(
+      defaultValue,
+    )}", table: "${IOS_STRINGS_TABLE_NAME}")`;
+  }
+
+  /** Returns every registered string translated into `locale`, in registration order. */
+  entriesForLocale(locale: string): AppleStringsEntry[] {
+    return [...this.records.values()].map((record) => ({
+      comment: record.comment,
+      key: record.key,
+      value: record.values[locale] ?? record.defaultValue,
+    }));
+  }
 }
 
 function serializeParameterDefault(definition: AnyParameterDefinition, value: unknown): unknown {
@@ -316,6 +488,28 @@ function toSwiftAppShortcutPhrase(
   );
 }
 
+/**
+ * Renders the lookup key Apple expects for an App Shortcut phrase in `AppShortcuts.strings`.
+ *
+ * This mirrors {@link toSwiftAppShortcutPhrase} exactly — same placeholder dropping, same
+ * whitespace collapsing — but emits Apple's `${...}` token syntax instead of Swift interpolation,
+ * so the key always lines up with the phrase literal in the generated source.
+ */
+function toAppShortcutsPhraseKey(
+  phrase: string,
+  parametersByName: ReadonlyMap<string, NormalizedIntentMetadata["params"][number]>,
+): string {
+  const appNameSentinel = "__APP_NAME_PLACEHOLDER__";
+  let rendered = phrase.replaceAll("${.applicationName}", appNameSentinel);
+
+  rendered = rendered.replace(/\$\{([A-Za-z0-9_]+)\}/g, (_match, parameterName: string) =>
+    parametersByName.get(parameterName)?.kind === "entity" ? `\${${parameterName}}` : "",
+  );
+  rendered = rendered.replace(/\s+/g, " ").trim();
+
+  return rendered.replaceAll(appNameSentinel, "${applicationName}");
+}
+
 function toAndroidResourceName(value: string): string {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
@@ -329,10 +523,39 @@ function getAndroidAppActionCapabilityName(intent: NormalizedIntentMetadata): st
   return intent.android?.appAction?.capabilityName ?? null;
 }
 
+/** Locale a set of Android label resources is being rendered for. */
+interface LocaleContext {
+  defaultLocale: string;
+  locale: string;
+}
+
+function localizeIntentTitle(
+  intent: NormalizedIntentMetadata,
+  localeContext: LocaleContext | undefined,
+): string {
+  if (!localeContext) {
+    return intent.title;
+  }
+
+  return resolveLocalizedText(intent.intent.title, intent.title, localeContext) ?? intent.title;
+}
+
+function localizeIntentDescription(
+  intent: NormalizedIntentMetadata,
+  localeContext: LocaleContext | undefined,
+): string | undefined {
+  if (!localeContext) {
+    return intent.description;
+  }
+
+  return resolveLocalizedText(intent.intent.description, intent.description, localeContext);
+}
+
 function getAndroidShortcutArtifact(
   intent: NormalizedIntentMetadata,
   entitiesById: ReadonlyMap<string, NormalizedEntityMetadata>,
   scheme: string,
+  localeContext?: LocaleContext,
 ): AndroidShortcutArtifact | null {
   const defaultParams = buildDefaultParams(intent);
 
@@ -341,12 +564,13 @@ function getAndroidShortcutArtifact(
   }
 
   const resourceBaseName = toAndroidResourceName(intent.id);
+  const title = localizeIntentTitle(intent, localeContext);
 
   return {
     id: intent.id,
-    longLabel: intent.description ?? intent.title,
+    longLabel: localizeIntentDescription(intent, localeContext) ?? title,
     longLabelResourceName: `react_native_app_intents_${resourceBaseName}_long_label`,
-    shortLabel: intent.title,
+    shortLabel: title,
     shortLabelResourceName: `react_native_app_intents_${resourceBaseName}_short_label`,
     ...(intent.appShortcut.iconAndroidResourceName
       ? { iconResourceName: intent.appShortcut.iconAndroidResourceName }
@@ -364,6 +588,7 @@ function getAndroidShortcutArtifacts(
   intentMetadata: readonly NormalizedIntentMetadata[],
   entitiesById: ReadonlyMap<string, NormalizedEntityMetadata>,
   scheme: string,
+  localeContext?: LocaleContext,
 ): AndroidShortcutArtifact[] {
   const artifacts: AndroidShortcutArtifact[] = [];
 
@@ -372,7 +597,7 @@ function getAndroidShortcutArtifacts(
       continue;
     }
 
-    const artifact = getAndroidShortcutArtifact(intent, entitiesById, scheme);
+    const artifact = getAndroidShortcutArtifact(intent, entitiesById, scheme, localeContext);
 
     if (artifact) {
       artifacts.push(artifact);
@@ -496,6 +721,7 @@ function getAndroidCapabilityInventoryShortcuts(
   intentMetadata: readonly NormalizedIntentMetadata[],
   entityMetadata: readonly NormalizedEntityMetadata[],
   scheme: string,
+  localeContext?: LocaleContext,
 ): AndroidShortcutArtifact[] {
   const entitiesById = new Map(entityMetadata.map((entity) => [entity.id, entity]));
 
@@ -545,7 +771,8 @@ function getAndroidCapabilityInventoryShortcuts(
       return {
         capabilityBindings: getAndroidCapabilityBindings(intent, params, entitiesById),
         id: shortcutId,
-        longLabel: `${intent.title} ${inventoryItem.displayRepresentation.title}`.trim(),
+        longLabel:
+          `${localizeIntentTitle(intent, localeContext)} ${inventoryItem.displayRepresentation.title}`.trim(),
         longLabelResourceName: `react_native_app_intents_${toAndroidResourceName(shortcutId)}_long_label`,
         shortLabel: inventoryItem.displayRepresentation.title,
         shortLabelResourceName: `react_native_app_intents_${toAndroidResourceName(shortcutId)}_short_label`,
@@ -695,17 +922,33 @@ function getSwiftParameterType(
 function renderSwiftParameter(
   parameter: SwiftRenderableParameter,
   entitiesById: ReadonlyMap<string, NormalizedEntityMetadata>,
+  intentId: string,
+  strings: LocalizableStringTable,
 ): string {
   const name = parameter.path.at(-1) ?? parameter.declarationName;
   const definition = parameter.definition;
+  const parameterKey = `intent.${intentId}.parameter.${parameter.path.join(".")}`;
   const lines = [
     `  @Parameter(`,
-    `    title: "${escapeSwiftString(resolveLocalizedText(definition.title, name) ?? name)}",`,
+    `    title: ${strings.swiftExpression(
+      `${parameterKey}.title`,
+      definition.title,
+      name,
+      `Title of the "${name}" parameter of the "${intentId}" intent.`,
+    )},`,
   ];
+
   const requestValueDialog = resolveLocalizedText(definition.requestValueDialog);
 
   if (requestValueDialog) {
-    lines.push(`    requestValueDialog: IntentDialog("${escapeSwiftString(requestValueDialog)}")`);
+    lines.push(
+      `    requestValueDialog: IntentDialog(${strings.swiftExpression(
+        `${parameterKey}.requestValueDialog`,
+        definition.requestValueDialog,
+        requestValueDialog,
+        `Prompt shown when Siri asks for the "${name}" parameter of the "${intentId}" intent.`,
+      )})`,
+    );
   }
 
   lines.push("  )");
@@ -734,7 +977,10 @@ function renderSwiftDisplayRepresentationLiteral(
   return `DisplayRepresentation(${argumentsList.join(", ")})`;
 }
 
-function renderSwiftEntity(entity: NormalizedEntityMetadata): string {
+function renderSwiftEntity(
+  entity: NormalizedEntityMetadata,
+  strings: LocalizableStringTable,
+): string {
   const entityTypeName = getSwiftEntityTypeName(entity.id);
   const entityQueryTypeName = getSwiftEntityQueryTypeName(entity.id);
   const entityCatalogTypeName = getSwiftEntityCatalogTypeName(entity.id);
@@ -757,7 +1003,12 @@ function renderSwiftEntity(entity: NormalizedEntityMetadata): string {
   return [
     "@available(iOS 16.0, *)",
     `struct ${entityTypeName}: AppEntity {`,
-    `  static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "${escapeSwiftString(entity.title)}")`,
+    `  static let typeDisplayRepresentation = TypeDisplayRepresentation(name: ${strings.swiftExpression(
+      `entity.${entity.id}.title`,
+      entity.entity.title,
+      entity.title,
+      `Display name of the "${entity.id}" App Entity type.`,
+    )})`,
     `  static let defaultQuery = ${entityQueryTypeName}()`,
     "",
     "  let id: String",
@@ -946,13 +1197,29 @@ function renderSwiftParameterSummary(
   ];
 }
 
+interface RenderSwiftOptions {
+  appGroupIdentifier?: string;
+  providerName: string;
+  scheme: string;
+  strings: LocalizableStringTable;
+}
+
+interface RenderedSwift {
+  /** Generated Swift source. */
+  source: string;
+  /** App Shortcut phrase translations keyed by locale, for `AppShortcuts.strings`. */
+  phrasesByLocale: Map<string, AppleStringsEntry[]>;
+}
+
 function renderSwift(
   intentMetadata: readonly NormalizedIntentMetadata[],
   entityMetadata: readonly NormalizedEntityMetadata[],
-  scheme: string,
-  providerName: string,
-  appGroupIdentifier?: string,
-): string {
+  options: RenderSwiftOptions,
+): RenderedSwift {
+  const { appGroupIdentifier, providerName, scheme, strings } = options;
+  const phrasesByLocale = new Map<string, AppleStringsEntry[]>(
+    strings.localized ? strings.locales.map((locale) => [locale, []]) : [],
+  );
   const entitiesById = new Map(entityMetadata.map((entity) => [entity.id, entity]));
   const declarations: string[] = [
     "import AppIntents",
@@ -1004,7 +1271,7 @@ function renderSwift(
   ];
 
   for (const entity of entityMetadata) {
-    declarations.push(renderSwiftEntity(entity));
+    declarations.push(renderSwiftEntity(entity, strings));
   }
 
   for (const intent of intentMetadata) {
@@ -1014,7 +1281,7 @@ function renderSwift(
       new Set<string>(),
     );
     const parameters = renderableParameters.map((parameter) =>
-      renderSwiftParameter(parameter, entitiesById),
+      renderSwiftParameter(parameter, entitiesById, intent.id, strings),
     );
     const flattenedParametersByPath = new Map(
       renderableParameters.map((parameter) => [
@@ -1044,9 +1311,19 @@ function renderSwift(
     declarations.push(
       "@available(iOS 16.0, *)",
       `struct ${typeName}: AppIntent {`,
-      `  static let title: LocalizedStringResource = "${escapeSwiftString(intent.title)}"`,
+      `  static let title: LocalizedStringResource = ${strings.swiftExpression(
+        `intent.${intent.id}.title`,
+        intent.intent.title,
+        intent.title,
+        `Title of the "${intent.id}" App Intent.`,
+      )}`,
       intent.description
-        ? `  static let description = IntentDescription("${escapeSwiftString(intent.description)}")`
+        ? `  static let description = IntentDescription(${strings.swiftExpression(
+            `intent.${intent.id}.description`,
+            intent.intent.description,
+            intent.description,
+            `Description of the "${intent.id}" App Intent.`,
+          )})`
         : '  static let description = IntentDescription("")',
       `  static let openAppWhenRun = ${intent.behavior.opensAppToForeground ? "true" : "false"}`,
       "",
@@ -1070,7 +1347,12 @@ function renderSwift(
       "",
       "    enqueueReactNativeAppIntentURL(url)",
       dialog
-        ? `    return .result(dialog: IntentDialog("${escapeSwiftString(dialog)}"))`
+        ? `    return .result(dialog: IntentDialog(${strings.swiftExpression(
+            `intent.${intent.id}.dialog`,
+            intent.intent.ios?.appIntent?.response?.dialog,
+            dialog,
+            `Siri dialog spoken after the "${intent.id}" App Intent runs.`,
+          )}))`
         : "    return .result()",
       "  }",
       "}",
@@ -1085,9 +1367,31 @@ function renderSwift(
       const parametersByName = new Map(
         intent.params.map((parameter) => [parameter.name, parameter]),
       );
-      const phrases = [
-        ...new Set(intent.phrases.map((phrase) => phrase.swiftAppShortcutPhrase)),
-      ].map((phrase) => `          "${toSwiftAppShortcutPhrase(phrase, parametersByName)}",`);
+      const uniquePhrases = new Map(
+        intent.phrases.map((phrase) => [phrase.swiftAppShortcutPhrase, phrase]),
+      );
+      const phrases = [...uniquePhrases.values()].map(
+        (phrase) =>
+          `          "${toSwiftAppShortcutPhrase(phrase.swiftAppShortcutPhrase, parametersByName)}",`,
+      );
+
+      if (strings.localized) {
+        for (const phrase of uniquePhrases.values()) {
+          const key = toAppShortcutsPhraseKey(phrase.swiftAppShortcutPhrase, parametersByName);
+          const comment = `App Shortcut phrase for the "${intent.id}" intent.`;
+
+          for (const [locale, entries] of phrasesByLocale) {
+            const translated = phrase.translations[locale];
+
+            entries.push({
+              comment,
+              key,
+              value: translated ? toAppShortcutsPhraseKey(translated, parametersByName) : key,
+            });
+          }
+        }
+      }
+
       const shortcutIconSystemName = intent.appShortcut.iconSystemName ?? "square.grid.2x2";
 
       return [
@@ -1096,7 +1400,12 @@ function renderSwift(
         "        phrases: [",
         ...phrases,
         "        ],",
-        `        shortTitle: "${escapeSwiftString(intent.title)}",`,
+        `        shortTitle: ${strings.swiftExpression(
+          `intent.${intent.id}.title`,
+          intent.intent.title,
+          intent.title,
+          `Title of the "${intent.id}" App Intent.`,
+        )},`,
         `        systemImageName: "${escapeSwiftString(shortcutIconSystemName)}"`,
         "      ),",
       ].join("\n");
@@ -1114,7 +1423,7 @@ function renderSwift(
     "",
   );
 
-  return declarations.join("\n");
+  return { phrasesByLocale, source: declarations.join("\n") };
 }
 
 function renderAndroidShortcuts(
@@ -1159,11 +1468,17 @@ function renderAndroidShortcutStrings(
   intentMetadata: readonly NormalizedIntentMetadata[],
   entityMetadata: readonly NormalizedEntityMetadata[],
   scheme: string,
+  localeContext?: LocaleContext,
 ): string {
   const entitiesById = new Map(entityMetadata.map((entity) => [entity.id, entity]));
   const strings = [
-    ...getAndroidShortcutArtifacts(intentMetadata, entitiesById, scheme),
-    ...getAndroidCapabilityInventoryShortcuts(intentMetadata, entityMetadata, scheme),
+    ...getAndroidShortcutArtifacts(intentMetadata, entitiesById, scheme, localeContext),
+    ...getAndroidCapabilityInventoryShortcuts(
+      intentMetadata,
+      entityMetadata,
+      scheme,
+      localeContext,
+    ),
   ].flatMap((shortcut) => [
     `    <string name="${shortcut.shortLabelResourceName}">${escapeXml(shortcut.shortLabel)}</string>`,
     `    <string name="${shortcut.longLabelResourceName}">${escapeXml(shortcut.longLabel)}</string>`,
@@ -1242,6 +1557,34 @@ function resolveAndroidShortcutStringsOutput(
   return join(resDirectory, "values", `${shortcutsOutputFileName}_strings.xml`);
 }
 
+/**
+ * Places a locale's shortcut label strings next to the default ones, under the matching Android
+ * resource qualifier directory.
+ */
+function resolveAndroidShortcutStringsOutputForLocale(
+  config: NonNullable<AppIntentsConfig["android"]> & { shortcutsOutput: string },
+  locale: string,
+  defaultLocale: string,
+): string {
+  const defaultOutput = resolveAndroidShortcutStringsOutput(config);
+  const qualifier = toAndroidValuesQualifier(locale, defaultLocale);
+
+  if (qualifier === "values") {
+    return defaultOutput;
+  }
+
+  return join(dirname(dirname(defaultOutput)), qualifier, basename(defaultOutput));
+}
+
+/** Directory that generated Apple `.lproj` string tables are written into. */
+function resolveIOSResourcesDirectory(config: AppIntentsConfig): string | undefined {
+  if (config.localization?.iosResourcesDirectory) {
+    return config.localization.iosResourcesDirectory;
+  }
+
+  return config.ios?.output ? dirname(config.ios.output) : undefined;
+}
+
 function formatTypeScriptPropertyKey(value: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value) ? value : JSON.stringify(value);
 }
@@ -1266,6 +1609,7 @@ function renderJSDoc(lines: readonly string[], indent = ""): string[] {
 function renderTypes(
   intentSources: readonly LoadedIntentSource[],
   typesOutputPath: string,
+  defaultLocale: string,
 ): string {
   const imports: string[] = [
     'import type { IntentEventUnion, ParamsOf } from "@avasapp/react-native-app-intents";',
@@ -1292,8 +1636,9 @@ function renderTypes(
     mapEntries.push(
       ...renderJSDoc(
         [
-          resolveLocalizedText(source.intent.title, source.intent.id) ?? source.intent.id,
-          resolveLocalizedText(source.intent.description) ?? "",
+          resolveLocalizedText(source.intent.title, source.intent.id, { defaultLocale }) ??
+            source.intent.id,
+          resolveLocalizedText(source.intent.description, undefined, { defaultLocale }) ?? "",
         ],
         "  ",
       ),
@@ -1477,23 +1822,67 @@ async function writeArtifact(
 async function renderArtifacts(config: AppIntentsConfig, cwd: string): Promise<RenderedArtifacts> {
   const intentSources = await loadIntentSources(config.intents, cwd);
   const intents = intentSources.map((source) => source.intent);
-  const normalizedIntents = normalizeIntentDefinitions(intents);
-  const normalizedEntities = normalizeReferencedEntities(intents);
+  const sourceLocations = new Map<object, AppIntentsSourceLocation>(
+    intentSources.map((source) => [source.intent, source.location]),
+  );
+  const defaultLocale = normalizeLocaleTag(config.localization?.defaultLocale ?? DEFAULT_LOCALE);
+  const normalizeOptions = { defaultLocale, sourceLocations };
+  const normalizedIntents = normalizeIntentDefinitions(intents, normalizeOptions);
+  const normalizedEntities = normalizeReferencedEntities(intents, normalizeOptions);
+  const locales = collectProjectLocales(intents, normalizeOptions);
+  const translatedLocales = locales.filter((locale) => locale !== defaultLocale);
   const artifacts: Array<GeneratedArtifact & { content: string }> = [];
   const diagnostics = getAndroidDiagnostics(normalizedIntents, config);
+  const strings = new LocalizableStringTable(locales, defaultLocale);
 
   if (config.ios?.output) {
+    const rendered = renderSwift(normalizedIntents, normalizedEntities, {
+      ...(config.ios.appGroupIdentifier
+        ? { appGroupIdentifier: config.ios.appGroupIdentifier }
+        : {}),
+      providerName: config.ios.appShortcutsProviderName ?? "GeneratedAppShortcuts",
+      scheme: config.scheme,
+      strings,
+    });
+
     artifacts.push({
-      content: renderSwift(
-        normalizedIntents,
-        normalizedEntities,
-        config.scheme,
-        config.ios.appShortcutsProviderName ?? "GeneratedAppShortcuts",
-        config.ios.appGroupIdentifier,
-      ),
+      content: rendered.source,
       path: resolve(cwd, config.ios.output),
       platform: "ios",
     });
+
+    const resourcesDirectory = resolveIOSResourcesDirectory(config);
+
+    if (strings.localized && !resourcesDirectory) {
+      diagnostics.push(
+        "Localized intents were found but no iOS resources directory could be resolved. Set localization.iosResourcesDirectory to emit .lproj string tables.",
+      );
+    }
+
+    if (strings.localized && resourcesDirectory) {
+      for (const locale of locales) {
+        const lprojDirectory = join(resourcesDirectory, toAppleLprojDirectoryName(locale));
+
+        artifacts.push({
+          content: renderAppleStringsFile(strings.entriesForLocale(locale)),
+          path: resolve(cwd, join(lprojDirectory, `${IOS_STRINGS_TABLE_NAME}.strings`)),
+          platform: "ios",
+        });
+
+        const phraseEntries = rendered.phrasesByLocale.get(locale) ?? [];
+
+        if (phraseEntries.length > 0) {
+          artifacts.push({
+            content: renderAppleStringsFile(phraseEntries),
+            path: resolve(
+              cwd,
+              join(lprojDirectory, `${IOS_APP_SHORTCUTS_STRINGS_TABLE_NAME}.strings`),
+            ),
+            platform: "ios",
+          });
+        }
+      }
+    }
   }
 
   if (config.android?.shortcutsOutput) {
@@ -1518,14 +1907,45 @@ async function renderArtifacts(config: AppIntentsConfig, cwd: string): Promise<R
       path: resolve(cwd, resolveAndroidShortcutStringsOutput(androidConfig)),
       platform: "android",
     });
+
+    for (const locale of translatedLocales) {
+      artifacts.push({
+        content: renderAndroidShortcutStrings(
+          normalizedIntents,
+          normalizedEntities,
+          config.scheme,
+          {
+            defaultLocale,
+            locale,
+          },
+        ),
+        path: resolve(
+          cwd,
+          resolveAndroidShortcutStringsOutputForLocale(androidConfig, locale, defaultLocale),
+        ),
+        platform: "android",
+      });
+    }
   }
 
   if (config.types?.output) {
     artifacts.push({
-      content: renderTypes(intentSources, resolve(cwd, config.types.output)),
+      content: renderTypes(intentSources, resolve(cwd, config.types.output), defaultLocale),
       path: resolve(cwd, config.types.output),
       platform: "types",
     });
+  }
+
+  if (translatedLocales.length > 0) {
+    diagnostics.push(
+      `Localization enabled: default locale "${defaultLocale}", translations for ${translatedLocales.join(", ")}.`,
+    );
+
+    if (config.ios?.output) {
+      diagnostics.push(
+        "Generated .lproj string tables must be added to the iOS target's Copy Bundle Resources phase, and the app's Info.plist must list the locales under CFBundleLocalizations.",
+      );
+    }
   }
 
   const androidManifest = config.android?.manifest

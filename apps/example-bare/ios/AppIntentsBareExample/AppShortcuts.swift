@@ -25,10 +25,20 @@ private func enqueueReactNativeAppIntentURL(_ url: URL) {
   defaults.synchronize()
 }
 
-private func encodeReactNativeAppIntentsJSONValue<T: Encodable>(_ value: T) throws -> String {
+private func reactNativeAppIntentsJSONObject<T: Encodable>(_ value: T) throws -> Any {
   let encoder = JSONEncoder()
   encoder.dateEncodingStrategy = .iso8601
   let data = try encoder.encode(value)
+  return try JSONSerialization.jsonObject(with: data)
+}
+
+private func reactNativeAppIntentsJSONObject(fromJSONString json: String) throws -> Any {
+  let data = Data(json.utf8)
+  return try JSONSerialization.jsonObject(with: data)
+}
+
+private func reactNativeAppIntentsJSONString(_ payload: [String: Any]) throws -> String {
+  let data = try JSONSerialization.data(withJSONObject: payload)
   return String(decoding: data, as: UTF8.self)
 }
 
@@ -119,6 +129,10 @@ struct OpenOrderIntent: AppIntent {
   static let description = IntentDescription("Open a specific order by number.")
   static let openAppWhenRun = true
 
+  static var parameterSummary: some ParameterSummary {
+    Summary("Open Order \(\.$orderNumber)")
+  }
+
   @Parameter(
     title: "Order number",
     requestValueDialog: IntentDialog("What's the order number?")
@@ -126,10 +140,9 @@ struct OpenOrderIntent: AppIntent {
   var orderNumber: String
 
   func perform() async throws -> some IntentResult {
-    let payloadEntries = [
-      "\"orderNumber\": \(try encodeReactNativeAppIntentsJSONValue(orderNumber))",
-    ]
-    let payloadString = "{\(payloadEntries.joined(separator: ","))}"
+    var payload: [String: Any] = [:]
+    payload["orderNumber"] = try reactNativeAppIntentsJSONObject(orderNumber)
+    let payloadString = try reactNativeAppIntentsJSONString(payload)
     var components = URLComponents()
     components.scheme = "example"
     components.host = "app-intents"
@@ -155,6 +168,10 @@ struct OpenSavedOrderIntent: AppIntent {
   static let description = IntentDescription("Open a saved order from inventory.")
   static let openAppWhenRun = true
 
+  static var parameterSummary: some ParameterSummary {
+    Summary("Open Saved Order \(\.$order)")
+  }
+
   @Parameter(
     title: "Order",
     requestValueDialog: IntentDialog("Which order?")
@@ -162,10 +179,9 @@ struct OpenSavedOrderIntent: AppIntent {
   var order: OrderAppEntity
 
   func perform() async throws -> some IntentResult {
-    let payloadEntries = [
-      "\"order\": \(try OrderEntityCatalog.jsonValue(for: order.id))",
-    ]
-    let payloadString = "{\(payloadEntries.joined(separator: ","))}"
+    var payload: [String: Any] = [:]
+    payload["order"] = try reactNativeAppIntentsJSONObject(fromJSONString: try OrderEntityCatalog.jsonValue(for: order.id))
+    let payloadString = try reactNativeAppIntentsJSONString(payload)
     var components = URLComponents()
     components.scheme = "example"
     components.host = "app-intents"

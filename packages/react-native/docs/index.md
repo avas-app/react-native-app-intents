@@ -163,6 +163,50 @@ appIntents.onIntent(openOrder, (params) => {
 });
 ```
 
+## Localization
+
+Intent `title` and `description`, parameter `title` / `prompt` / `requestValueDialog`, entity
+`title`, `ios.appIntent.response.dialog`, and `phrases` all accept a locale map instead of a plain
+string:
+
+```ts
+export const openOrder = defineIntent({
+  id: "openOrder",
+  title: { en: "Open Order", fr: "Ouvrir la commande" },
+  phrases: {
+    en: ["Open order ${orderNumber} in ${.applicationName}"],
+    fr: ["Ouvrir la commande ${orderNumber} dans ${.applicationName}"],
+  },
+  params: {
+    orderNumber: p.string({ title: { en: "Order number", fr: "Numéro de commande" } }),
+  },
+  surfaces: { appShortcut: true },
+});
+```
+
+Codegen resolves `localization.defaultLocale` (default `"en"`) into the generated native files and
+writes every other locale as a platform string table:
+
+- `<locale>.lproj/AppIntents.strings` — titles, descriptions, dialogs, parameter text
+- `<locale>.lproj/AppShortcuts.strings` — App Shortcut invocation phrases
+- `res/values-<qualifier>/..._strings.xml` — Android shortcut labels
+
+Projects that only use one locale generate exactly what they did before, with no extra files.
+
+Two rules the codegen enforces: translated phrases must contain `${.applicationName}` themselves,
+and every locale must declare the same number of phrases, because translations are matched by
+position.
+
+The generated `.lproj` directories still need to be added to the iOS target's Copy Bundle Resources
+phase, and the locales listed under `CFBundleLocalizations` in `Info.plist`. Codegen prints both
+reminders as diagnostics.
+
+At runtime, `donate` and `updateDynamicShortcuts` resolve locale maps against the device locale.
+Pass `locale` to `createAppIntentsRuntime` when the app has its own language picker.
+
+See the [documentation site](https://avas-app.github.io/react-native-app-intents/) for the full
+localization guide and recipes.
+
 ## Auth-gated apps
 
 For auth-gated or feature-flagged flows, donate when the user completes a real

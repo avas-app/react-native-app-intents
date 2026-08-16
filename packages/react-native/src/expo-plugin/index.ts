@@ -137,6 +137,10 @@ function mergeConfigObjects(
     merged.android = { ...fileConfig.android, ...inlineConfig.android };
   }
 
+  if (fileConfig.localization || inlineConfig.localization) {
+    merged.localization = { ...fileConfig.localization, ...inlineConfig.localization };
+  }
+
   if (fileConfig.types || inlineConfig.types) {
     merged.types = { ...fileConfig.types, ...inlineConfig.types };
   }
@@ -397,6 +401,27 @@ function resolveExpoIOSOutput(options: AppIntentsConfig, iosProjectName: string)
   return joinNativePath("ios", iosProjectName, output);
 }
 
+/**
+ * Resolves the directory that generated `.lproj` string tables are written to, applying the same
+ * `ios/<project>/` prefixing rule that {@link resolveExpoIOSOutput} applies to the Swift output.
+ */
+function resolveExpoIOSResourcesDirectory(
+  options: AppIntentsConfig,
+  iosProjectName: string,
+): string | undefined {
+  const configured = options.localization?.iosResourcesDirectory;
+
+  if (!configured) {
+    return undefined;
+  }
+
+  const directory = toNativePath(configured);
+
+  return directory.startsWith("ios/")
+    ? directory
+    : joinNativePath("ios", iosProjectName, directory);
+}
+
 function toIOSProjectRelativePath(iosOutput: string): string {
   const output = toNativePath(iosOutput);
   return output.startsWith("ios/") ? output.slice("ios/".length) : output;
@@ -437,6 +462,10 @@ export function resolveExpoCodegenConfig(
 ): AppIntentsConfig {
   const iosBundleIdentifier = options.ios?.bundleIdentifier ?? config.ios?.bundleIdentifier;
   const androidPackageName = options.android?.packageName ?? config.android?.package;
+  const iosResourcesDirectory =
+    platform === "ios" && iosProjectName
+      ? resolveExpoIOSResourcesDirectory(options, iosProjectName)
+      : undefined;
 
   return defineAppIntentsConfig({
     intents: options.intents,
@@ -467,6 +496,14 @@ export function resolveExpoCodegenConfig(
             ...(options.android?.shortcutsStringsOutput
               ? { shortcutsStringsOutput: toNativePath(options.android.shortcutsStringsOutput) }
               : {}),
+          },
+        }
+      : {}),
+    ...(options.localization
+      ? {
+          localization: {
+            ...options.localization,
+            ...(iosResourcesDirectory ? { iosResourcesDirectory } : {}),
           },
         }
       : {}),

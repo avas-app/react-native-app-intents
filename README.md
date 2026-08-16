@@ -138,6 +138,47 @@ async function logout() {
 an iOS SF Symbol (`systemName`) and/or an Android shortcut resource reference
 (`androidResourceName`, such as `@mipmap/ic_launcher_round`).
 
+## Localization
+
+Intent `title` and `description`, parameter `title` / `prompt` / `requestValueDialog`, entity
+`title`, `ios.appIntent.response.dialog`, and `phrases` accept a locale map instead of a plain
+string:
+
+```ts
+export const openOrder = defineIntent({
+  id: "openOrder",
+  title: { en: "Open Order", fr: "Ouvrir la commande" },
+  phrases: {
+    en: ["Open order ${orderNumber} in ${.applicationName}"],
+    fr: ["Ouvrir la commande ${orderNumber} dans ${.applicationName}"],
+  },
+  params: {
+    orderNumber: p.string({ title: { en: "Order number", fr: "Numéro de commande" } }),
+  },
+  surfaces: { appShortcut: true },
+});
+```
+
+Codegen resolves `localization.defaultLocale` (default `"en"`) into the generated native files and
+emits the other locales as `<locale>.lproj/AppIntents.strings`,
+`<locale>.lproj/AppShortcuts.strings`, and `res/values-<qualifier>/..._strings.xml`. Single-locale
+projects generate exactly what they did before, with no extra files.
+
+```ts
+export default defineAppIntentsConfig({
+  intents: ["src/**/*.intents.ts"],
+  scheme: "myapp",
+  localization: {
+    defaultLocale: "en",
+    iosResourcesDirectory: "ios/MyApp/Resources",
+  },
+});
+```
+
+Generated `.lproj` directories still need adding to the iOS target's Copy Bundle Resources phase,
+and the locales listing under `CFBundleLocalizations`. At runtime, `donate` and
+`updateDynamicShortcuts` resolve locale maps against the device locale.
+
 ## Android App Actions contract
 
 - Use `android.appAction` to opt an intent into Android App Actions.
@@ -275,6 +316,9 @@ only; Expo-bundled PNG assets are not used there.
 - Nested object-parameter support in generated iOS App Intents, including generated parameter summaries.
 - Static iOS App Intent dialog responses via `ios.appIntent.response.dialog`.
 - Generated TypeScript event types.
+- Multi-locale titles, descriptions, dialogs, and phrases, emitted as Apple `.strings` tables and
+  Android `values-*/strings.xml` resources.
+- Codegen diagnostics that point at the file and line of the failing declaration.
 - Runtime helpers for initial intents, warm intent events, intent URL parsing/building, donations,
   donation clearing, and dynamic shortcuts.
 - Expo prebuild plugin for iOS codegen, URL scheme setup, app group entitlements, quick-action forwarding, and Android foreground deep-link manifest setup.

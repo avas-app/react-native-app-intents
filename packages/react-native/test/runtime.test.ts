@@ -278,6 +278,86 @@ test("runtime returns a startup event that arrives before any handlers subscribe
   });
 });
 
+test("runtime resolves localized titles against the configured locale", async () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: { en: "Open Order", fr: "Ouvrir la commande" },
+    params: {
+      orderNumber: p.string(),
+    },
+  });
+  const donated: string[] = [];
+  const shortcutTitles: (string | undefined)[] = [];
+  const linking = createLinkingAdapter(null);
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [openOrder] as const,
+    linking: linking.adapter,
+    locale: "fr",
+    nativeModule: {
+      async clearDonations() {},
+      async donate(_id, title) {
+        donated.push(title);
+      },
+      async updateDynamicShortcuts(shortcuts) {
+        for (const shortcut of shortcuts) {
+          shortcutTitles.push(shortcut.title, shortcut.subtitle);
+        }
+      },
+    },
+  });
+
+  await runtime.donate(openOrder, { orderNumber: "1234" });
+  await runtime.updateDynamicShortcuts([
+    { intent: openOrder, params: { orderNumber: "1234" } },
+    {
+      id: "openOrderCustom",
+      intent: openOrder,
+      params: { orderNumber: "5678" },
+      shortTitle: { en: "Open order #5678", fr: "Ouvrir la commande n° 5678" },
+      longTitle: "Taylor",
+    },
+  ]);
+  runtime.dispose();
+
+  assert.deepEqual(donated, ["Ouvrir la commande"]);
+  assert.deepEqual(shortcutTitles, [
+    "Ouvrir la commande",
+    undefined,
+    "Ouvrir la commande n° 5678",
+    "Taylor",
+  ]);
+});
+
+test("runtime falls back to the default locale for untranslated titles", async () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: { en: "Open Order", fr: "Ouvrir la commande" },
+    params: {},
+  });
+  const donated: string[] = [];
+  const linking = createLinkingAdapter(null);
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [openOrder] as const,
+    linking: linking.adapter,
+    locale: "de",
+    defaultLocale: "fr",
+    nativeModule: {
+      async clearDonations() {},
+      async donate(_id, title) {
+        donated.push(title);
+      },
+      async updateDynamicShortcuts() {},
+    },
+  });
+
+  await runtime.donate(openOrder, {});
+  runtime.dispose();
+
+  assert.deepEqual(donated, ["Ouvrir la commande"]);
+});
+
 test("parseIntentUrl ignores unrelated urls", () => {
   const openOrder = defineIntent({
     id: "openOrder",

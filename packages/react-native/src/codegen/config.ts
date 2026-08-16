@@ -17,11 +17,28 @@ export interface TypesOutputConfig {
   output: string;
 }
 
+export interface LocalizationConfig {
+  /**
+   * Locale the intent definitions are authored in.
+   *
+   * Generated native artifacts use this locale, and every other locale found in the definitions is
+   * emitted as a translation table alongside them. Defaults to `"en"`.
+   */
+  defaultLocale?: string;
+  /**
+   * Directory that per-locale Apple `.lproj` string tables are written to.
+   *
+   * Defaults to the directory holding `ios.output`. Ignored when `ios.output` is not configured.
+   */
+  iosResourcesDirectory?: string;
+}
+
 export interface AppIntentsConfigInput {
   intents: string | readonly string[];
   scheme: string;
   ios?: IOSAppIntentsConfig;
   android?: AndroidAppIntentsConfig;
+  localization?: LocalizationConfig;
   types?: TypesOutputConfig;
 }
 
