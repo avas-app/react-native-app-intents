@@ -9,7 +9,7 @@ import {
   normalizeReferencedEntities,
   p,
   type ParamsOf,
-} from "../src/index.js";
+} from "../src/core/index.js";
 
 test("defineIntent preserves typed params", () => {
   const openOrder = defineIntent({

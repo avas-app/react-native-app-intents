@@ -3,10 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import {
-  defineAppIntentsConfig,
-  generateAppIntents,
-} from "@avasapp/react-native-app-intents/codegen";
+import { defineAppIntentsConfig, generateAppIntents } from "../src/codegen/index.js";
 
 import {
   applyAndroidExpoSchemeFilters,
@@ -16,7 +13,7 @@ import {
   resolveExpoAppIntentsPluginOptions,
   resolveExpoCodegenConfig,
   withAppIntents,
-} from "../src/index.js";
+} from "../src/expo-plugin/index.js";
 
 test("withAppIntents appends a plugin tuple", () => {
   const config = withAppIntents(

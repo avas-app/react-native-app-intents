@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { defineAppIntentsConfig, generateAppIntents } from "../src/index.js";
+import { defineAppIntentsConfig, generateAppIntents } from "../src/codegen/index.js";
 
 const execFile = promisify(execFileCallback);
 

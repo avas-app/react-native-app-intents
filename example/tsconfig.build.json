@@ -8,10 +8,5 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts", "app-intents.config.ts"],
-  "references": [
-    { "path": "../packages/core/tsconfig.build.json" },
-    { "path": "../packages/codegen/tsconfig.build.json" },
-    { "path": "../packages/react-native/tsconfig.build.json" },
-    { "path": "../packages/expo-plugin/tsconfig.build.json" }
-  ]
+  "references": [{ "path": "../packages/react-native/tsconfig.build.json" }]
 }

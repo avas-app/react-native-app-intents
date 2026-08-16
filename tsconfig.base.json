@@ -28,11 +28,7 @@
       "@avasapp/react-native-app-intents/core": ["packages/react-native/src/core/index.ts"],
       "@avasapp/react-native-app-intents/expo-plugin": [
         "packages/react-native/src/expo-plugin/index.ts"
-      ],
-      "@react-native-app-intents/core": ["packages/core/src/index.ts"],
-      "@react-native-app-intents/codegen": ["packages/codegen/src/index.ts"],
-      "@react-native-app-intents/cli": ["packages/cli/src/index.ts"],
-      "@react-native-app-intents/expo-plugin": ["packages/expo-plugin/src/index.ts"]
+      ]
     }
   }
 }

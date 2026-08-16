@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { runCli } from "../src/index.js";
+import { runCli } from "../src/cli/index.js";
 
 test("runCli loads config and writes generated outputs", async () => {
   const repoRoot = resolve(import.meta.dirname, "../../..");
