@@ -3,6 +3,7 @@
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -188,11 +189,20 @@ static Class ReactNativeAppIntentsBridgeClass(void)
 
 RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
+@synthesize viewRegistry_DEPRECATED = _viewRegistry_DEPRECATED;
+
 - (instancetype)init
 {
   self = [super init];
 
   if (self) {
+    Class bridge = ReactNativeAppIntentsBridgeClass();
+    SEL startSelector = NSSelectorFromString(@"start");
+
+    if (bridge != nil && [bridge respondsToSelector:startSelector]) {
+      ((void (*)(id, SEL))objc_msgSend)(bridge, startSelector);
+    }
+
     ReactNativeAppIntentsCurrentModule = self;
     __weak ReactNativeAppIntents *weakSelf = self;
     // Swift posts this after writing a run, so a foreground run reaches JS without an AppState change.
@@ -502,7 +512,27 @@ RCT_REMAP_METHOD(
   });
 }
 
-// Stub until the view lookup is decided; useAppEntityTag is not shipped yet.
+static const void *ReactNativeAppIntentsTagValueKey = &ReactNativeAppIntentsTagValueKey;
+static NSMapTable<NSNumber *, UIView *> *ReactNativeAppIntentsTaggedViews;
+static NSMutableDictionary<NSNumber *, NSString *> *ReactNativeAppIntentsTaggedValues;
+
+- (UIView *)viewForReactTag:(NSNumber *)reactTag
+{
+  id registry = self.viewRegistry_DEPRECATED;
+  SEL selector = NSSelectorFromString(@"viewForReactTag:");
+
+  if ([registry respondsToSelector:selector]) {
+    return ((UIView * (*)(id, SEL, NSNumber *)) objc_msgSend)(registry, selector, reactTag);
+  }
+
+  // Old architecture: the bridge's UIManager owns the registry.
+  id uiManager = [self.bridge valueForKey:@"uiManager"];
+
+  return [uiManager respondsToSelector:selector]
+    ? ((UIView * (*)(id, SEL, NSNumber *)) objc_msgSend)(uiManager, selector, reactTag)
+    : nil;
+}
+
 RCT_REMAP_METHOD(
   setEntityTag,
   setEntityTag:(nonnull NSNumber *)reactTag
@@ -512,7 +542,56 @@ RCT_REMAP_METHOD(
   rejecter:(RCTPromiseRejectBlock)reject
 )
 {
-  resolve(nil);
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"setEntityIdentifierOn:entityId:id:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (ReactNativeAppIntentsTaggedViews == nil) {
+      ReactNativeAppIntentsTaggedViews = [NSMapTable strongToWeakObjectsMapTable];
+      ReactNativeAppIntentsTaggedValues = [NSMutableDictionary new];
+    }
+
+    BOOL clear = entityId == nil || itemId == nil;
+    UIView *view = [self viewForReactTag:reactTag];
+    UIView *known = [ReactNativeAppIntentsTaggedViews objectForKey:reactTag];
+
+    if (clear) {
+      // Unmount: the registry may already have dropped the view, so fall back to the one we tagged.
+      view = view ?: known;
+      NSString *ours = ReactNativeAppIntentsTaggedValues[reactTag];
+      NSString *current = view ? objc_getAssociatedObject(view, ReactNativeAppIntentsTagValueKey) : nil;
+
+      // A recycled view may already carry another row's tag; leave it alone.
+      if (view != nil && ours != nil && [ours isEqualToString:current]) {
+        objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, nil, nil);
+      }
+
+      [ReactNativeAppIntentsTaggedViews removeObjectForKey:reactTag];
+      [ReactNativeAppIntentsTaggedValues removeObjectForKey:reactTag];
+      resolve(nil);
+      return;
+    }
+
+    if (view == nil) {
+      resolve(nil);
+      return;
+    }
+
+    // The value is unique per tag, so a recycled view carrying another tag's value is not ours.
+    NSString *value = [NSString stringWithFormat:@"%@|%@|%@", reactTag, entityId, itemId];
+
+    objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, value, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    ReactNativeAppIntentsTaggedValues[reactTag] = value;
+    [ReactNativeAppIntentsTaggedViews setObject:view forKey:reactTag];
+    ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, entityId, itemId);
+    resolve(nil);
+  });
 }
 
 + (void)recordIncomingURLString:(NSString *)url

@@ -732,6 +732,59 @@ export function useOnscreenEntity(
   }, [entityId, id]);
 }
 
+/** Tags one native view with an entity and returns the cleanup that clears it with the saved tag. */
+export function bindEntityTag(
+  nativeModule: AppIntentsNativeModule,
+  reactTag: number,
+  entity: EntityDefinition<any>,
+  id: string,
+): () => void {
+  void Promise.resolve(nativeModule.setEntityTag?.(reactTag, entity.id, id)).catch(() => {});
+
+  return () => {
+    void Promise.resolve(nativeModule.setEntityTag?.(reactTag, null, null)).catch(() => {});
+  };
+}
+
+/** Tags a view so Siri knows it shows this entity (iOS 18.4+). The View needs collapsable={false}. */
+export function useAppEntityTag(
+  ref: { current: unknown },
+  entity: EntityDefinition<any>,
+  id: string | null | undefined,
+): void {
+  if (typeof require !== "function") {
+    return;
+  }
+
+  const { useEffect } = require("react") as {
+    useEffect(effect: () => void | (() => void), deps: readonly unknown[]): void;
+  };
+  const entityId = entity.id;
+
+  // useEffect, not useLayoutEffect: the native view is not mounted yet in a layout effect.
+  useEffect(() => {
+    if (!isIos() || id === null || id === undefined || id === "" || ref.current === null) {
+      return;
+    }
+
+    const { findNodeHandle } = require("react-native") as {
+      findNodeHandle(instance: unknown): number | null;
+    };
+    const reactTag = findNodeHandle(ref.current);
+
+    if (reactTag === null || reactTag === undefined) {
+      return;
+    }
+
+    return bindEntityTag(
+      getNativeModule(),
+      reactTag,
+      { id: entityId } as EntityDefinition<any>,
+      id,
+    );
+  }, [entityId, id, ref]);
+}
+
 export interface AppIntentsRuntime<TIntents extends IntentTuple> {
   getEntities<TEntity extends EntityDefinition<any>>(
     entity: TEntity,

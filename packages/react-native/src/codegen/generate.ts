@@ -1217,6 +1217,16 @@ function renderSwiftBridge(
     "    }",
     "  }",
     "",
+    "  @objc static func start() {",
+    ...(hasSpotlight
+      ? [
+          "    if #available(iOS 18.0, *) {",
+          "      ReactNativeAppIntentsIndexDelegate.install()",
+          "    }",
+        ]
+      : []),
+    "  }",
+    "",
     "  @objc static func setOnscreenEntity(_ entityId: String?, id: String?) {",
     "    DispatchQueue.main.async {",
     "      guard #available(iOS 18.2, *) else {",

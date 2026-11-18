@@ -209,7 +209,22 @@ useOnscreenEntity(order, selectedOrder?.id);
 
 Pass the entity and the id on screen; pass `null` or `undefined` to clear it.
 
-`setEntities`, `getEntities`, `reindexEntities`, `useOnscreenEntity` and Spotlight
+### Tag a view
+
+Tag a single view, such as a list row, with the entity it shows (iOS 18.4+).
+
+```tsx
+const ref = useRef<View>(null);
+useAppEntityTag(ref, order, row.id);
+
+<View ref={ref} collapsable={false}>
+  …
+</View>;
+```
+
+The view needs `collapsable={false}` so it exists as a native view. The tag is cleared on unmount or when the id changes. It does nothing on Android and older iOS.
+
+`setEntities`, `getEntities`, `reindexEntities`, `useOnscreenEntity`, `useAppEntityTag` and Spotlight
 are iOS-only. On Android they resolve and do nothing.
 
 ## Android App Actions contract

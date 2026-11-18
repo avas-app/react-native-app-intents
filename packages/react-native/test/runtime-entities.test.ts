@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { defineEntity, p } from "../src/core/index.js";
 import type { AppIntentsNativeModule } from "../src/native.js";
-import { createAppIntentsRuntime, setOnscreenEntity } from "../src/index.js";
+import { bindEntityTag, createAppIntentsRuntime, setOnscreenEntity } from "../src/index.js";
 
 const order = defineEntity({
   id: "order",
@@ -35,6 +35,9 @@ function createNative(stored: string | null = null) {
     },
     async reindexEntities(entityId: string | null) {
       calls.push(["reindex", entityId]);
+    },
+    async setEntityTag(tag: number, entityId: string | null, id: string | null) {
+      calls.push(["tag", tag, entityId, id]);
     },
     async setOnscreenEntity(entityId: string | null, id: string | null) {
       calls.push(["onscreen", entityId, id]);
@@ -166,4 +169,32 @@ test("setOnscreenEntity sends the entity and id, and null clears", async () => {
     ["onscreen", "order", "4521"],
     ["onscreen", null, null],
   ]);
+});
+
+test("bindEntityTag sets the tag, and cleanup clears it with the saved tag", () => {
+  const { calls, native } = createNative();
+  const clear = bindEntityTag(native, 42, order, "4521");
+  assert.deepEqual(calls, [["tag", 42, "order", "4521"]]);
+  clear();
+  assert.deepEqual(calls[1], ["tag", 42, null, null]);
+});
+
+test("changing the id clears the old binding before the new one is set", () => {
+  const { calls, native } = createNative();
+  const clearFirst = bindEntityTag(native, 42, order, "1");
+  clearFirst();
+  const clearSecond = bindEntityTag(native, 42, order, "2");
+  clearSecond();
+  assert.deepEqual(calls, [
+    ["tag", 42, "order", "1"],
+    ["tag", 42, null, null],
+    ["tag", 42, "order", "2"],
+    ["tag", 42, null, null],
+  ]);
+});
+
+test("bindEntityTag is a no-op when native lacks setEntityTag", () => {
+  const { native } = createNative();
+  delete native.setEntityTag;
+  assert.doesNotThrow(() => bindEntityTag(native, 1, order, "1")());
 });

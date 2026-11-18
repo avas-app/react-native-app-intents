@@ -172,6 +172,10 @@ test("runtime + spotlight entities generate store-backed queries, IndexedEntity 
     swift,
     /@objc static func reindex\(_ entityId: String\?, completion: @escaping \(NSError\?\) -> Void\)/,
   );
+  assert.match(
+    swift,
+    /@objc static func start\(\) \{\n    if #available\(iOS 18\.0, \*\) \{\n      ReactNativeAppIntentsIndexDelegate\.install\(\)/,
+  );
   assert.match(swift, /@objc static func setOnscreenEntity\(_ entityId: String\?, id: String\?\)/);
   assert.match(
     swift,

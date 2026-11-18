@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Linking,
@@ -12,7 +12,11 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
-import { type EntityCatalogEntry, useOnscreenEntity } from "@avasapp/react-native-app-intents";
+import {
+  type EntityCatalogEntry,
+  useAppEntityTag,
+  useOnscreenEntity,
+} from "@avasapp/react-native-app-intents";
 import {
   Order,
   exampleRuntime,
@@ -61,6 +65,24 @@ function App(): ReactElement {
         <AppContent />
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+function OrderRow({
+  onPress,
+  order,
+}: {
+  onPress: () => void;
+  order: EntityCatalogEntry<typeof Order>;
+}): ReactElement {
+  const ref = useRef<View>(null);
+
+  useAppEntityTag(ref, Order, order.id);
+
+  return (
+    <View collapsable={false} ref={ref}>
+      <Button onPress={onPress} title={`Show ${order.title}`} />
+    </View>
   );
 }
 
@@ -222,12 +244,12 @@ function AppContent(): ReactElement {
         <Text style={styles.body}>{onscreenOrderId ?? "No order is on screen."}</Text>
         <View style={styles.actions}>
           {SAMPLE_ORDERS.map((order) => (
-            <Button
+            <OrderRow
               key={order.id}
               onPress={() => {
                 setOnscreenOrderId(order.id);
               }}
-              title={`Show ${order.title}`}
+              order={order}
             />
           ))}
           <Button
