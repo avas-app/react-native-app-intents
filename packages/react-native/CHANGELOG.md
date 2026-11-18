@@ -4,6 +4,14 @@ All notable changes to this package are documented here.
 
 Entries before 0.2.5 were reconstructed from git history after the fact and may be incomplete.
 
+## 0.2.7
+
+### Fixed
+
+- Android builds no longer fail on Android Gradle Plugin 9, which registers the `kotlin` extension
+  itself. The library now applies `kotlin-android` only when that extension is missing, so AGP 8
+  builds are unchanged.
+
 ## 0.2.6
 
 ### Fixed
