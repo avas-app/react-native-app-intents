@@ -31,5 +31,10 @@ export interface AppIntentsNativeModule {
   acknowledgeIntent?(invocationId: string): Promise<void>;
   getInitialIntentURL?(): Promise<string | null>;
   getPendingIntentURLs?(): Promise<string[]>;
+  getEntityCatalog?(entityId: string): Promise<string | null>;
+  reindexEntities?(entityId: string | null): Promise<void>;
+  setEntityCatalog?(entityId: string, json: string): Promise<void>;
+  setEntityTag?(reactTag: number, entityId: string | null, id: string | null): Promise<void>;
+  setOnscreenEntity?(entityId: string | null, id: string | null): Promise<void>;
   updateDynamicShortcuts(shortcuts: readonly NativeShortcutPayload[]): Promise<void>;
 }

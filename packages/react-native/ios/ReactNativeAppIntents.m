@@ -2,6 +2,7 @@
 
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -168,6 +169,14 @@ static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
 
     return urls;
   }
+}
+
+static NSString *const ReactNativeAppIntentsCatalogKeyPrefix = @"ReactNativeAppIntentsEntityCatalog.";
+
+// Generated code defines the bridge class; a missing class means codegen was not rerun.
+static Class ReactNativeAppIntentsBridgeClass(void)
+{
+  return NSClassFromString(@"ReactNativeAppIntentsGeneratedBridge");
 }
 
 @interface ReactNativeAppIntents ()
@@ -373,6 +382,137 @@ RCT_REMAP_METHOD(
     [UIApplication sharedApplication].shortcutItems = items;
     resolve(nil);
   });
+}
+
+RCT_REMAP_METHOD(
+  setEntityCatalog,
+  setEntityCatalog:(NSString *)entityId
+  json:(NSString *)json
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  if (entityId.length == 0 || json == nil) {
+    reject(@"invalid_catalog", @"entityId and json are required", nil);
+    return;
+  }
+
+  NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+  id parsed = data != nil ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+
+  if (![parsed isKindOfClass:[NSArray class]]) {
+    reject(@"invalid_catalog", @"The catalog must be a JSON array", nil);
+    return;
+  }
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    [ReactNativeAppIntentsUserDefaults()
+      setObject:json
+         forKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId]];
+  }
+
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"catalogDidChange:completion:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  void (^completion)(NSError *) = ^(NSError *_Nullable error) {
+    if (error != nil) {
+      reject(@"catalog_update_failed", error.localizedDescription, error);
+      return;
+    }
+
+    resolve(nil);
+  };
+
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    ((void (*)(id, SEL, NSString *, void (^)(NSError *)))objc_msgSend)(bridge, selector, entityId, completion);
+  });
+}
+
+RCT_REMAP_METHOD(
+  getEntityCatalog,
+  getEntityCatalog:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  NSString *json = nil;
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    id value = [ReactNativeAppIntentsUserDefaults()
+      objectForKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId ?: @""]];
+    json = [value isKindOfClass:[NSString class]] ? value : nil;
+  }
+
+  resolve(json);
+}
+
+RCT_REMAP_METHOD(
+  reindexEntities,
+  reindexEntities:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"reindex:completion:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  void (^completion)(NSError *) = ^(NSError *_Nullable error) {
+    if (error != nil) {
+      reject(@"reindex_failed", error.localizedDescription, error);
+      return;
+    }
+
+    resolve(nil);
+  };
+
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    ((void (*)(id, SEL, NSString *, void (^)(NSError *)))objc_msgSend)(bridge, selector, entityId, completion);
+  });
+}
+
+RCT_REMAP_METHOD(
+  setOnscreenEntity,
+  setOnscreenEntity:(NSString *)entityId
+  id:(NSString *)itemId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"setOnscreenEntity:id:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    ((void (*)(id, SEL, NSString *, NSString *))objc_msgSend)(bridge, selector, entityId, itemId);
+    resolve(nil);
+  });
+}
+
+// Stub until the view lookup is decided; useAppEntityTag is not shipped yet.
+RCT_REMAP_METHOD(
+  setEntityTag,
+  setEntityTag:(nonnull NSNumber *)reactTag
+  entityId:(NSString *)entityId
+  id:(NSString *)itemId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  resolve(nil);
 }
 
 + (void)recordIncomingURLString:(NSString *)url
