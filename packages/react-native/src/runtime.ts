@@ -1,6 +1,8 @@
 import type {
   AnyParameterDefinition,
   DynamicShortcutIcon,
+  EntityDefinition,
+  InferParameterValue,
   IntentDefinition,
   ParamsOf,
 } from "./core/index.js";
@@ -569,7 +571,176 @@ export function parseIntentUrl<TIntents extends IntentTuple>(
   } as IntentEventUnion<TIntents>;
 }
 
+export interface EntityCatalogEntry<TEntity extends EntityDefinition<any>> {
+  id: string;
+  title: string;
+  subtitle?: string;
+  synonyms?: readonly string[];
+  value: InferParameterValue<TEntity["schema"]>;
+  hideInSpotlight?: boolean;
+}
+
+interface StoredCatalogEntry {
+  id: string;
+  title: string;
+  subtitle?: string;
+  synonyms?: string[];
+  value: unknown;
+  hideInSpotlight?: boolean;
+}
+
+function normalizeCatalog(
+  entity: EntityDefinition<any>,
+  entries: readonly EntityCatalogEntry<any>[],
+): StoredCatalogEntry[] {
+  if (!Array.isArray(entries)) {
+    throw new TypeError(`setEntities(${entity.id}): entries must be an array`);
+  }
+
+  const seen = new Set<string>();
+
+  return entries.map((entry, index) => {
+    if (typeof entry?.id !== "string" || entry.id.trim() === "") {
+      throw new TypeError(`setEntities(${entity.id}): entry ${index} needs a non-empty id`);
+    }
+
+    if (typeof entry.title !== "string" || entry.title.trim() === "") {
+      throw new TypeError(`setEntities(${entity.id}): entry "${entry.id}" needs a non-empty title`);
+    }
+
+    if (seen.has(entry.id)) {
+      throw new TypeError(`setEntities(${entity.id}): duplicate id "${entry.id}"`);
+    }
+
+    seen.add(entry.id);
+
+    const stored: StoredCatalogEntry = {
+      id: entry.id,
+      title: entry.title,
+      value: serializeParameterValue(entity.schema, entry.value) ?? {},
+    };
+
+    if (entry.subtitle !== undefined) {
+      stored.subtitle = entry.subtitle;
+    }
+
+    if (entry.synonyms !== undefined) {
+      stored.synonyms = [...entry.synonyms];
+    }
+
+    if (entry.hideInSpotlight !== undefined) {
+      stored.hideInSpotlight = entry.hideInSpotlight;
+    }
+
+    return stored;
+  });
+}
+
+function seedCatalog(entity: EntityDefinition<any>): StoredCatalogEntry[] {
+  return (entity.inventory ?? []).map((value) => {
+    const display = entity.displayRepresentation(value);
+    const stored: StoredCatalogEntry = {
+      id: entity.identifier(value),
+      title: display.title,
+      value: serializeParameterValue(entity.schema, value),
+    };
+
+    if (display.subtitle) {
+      stored.subtitle = display.subtitle;
+    }
+
+    return stored;
+  });
+}
+
+function parseStoredCatalog(json: string | null | undefined): StoredCatalogEntry[] | null {
+  if (!json) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(json);
+
+    return Array.isArray(parsed) ? (parsed as StoredCatalogEntry[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function toPublicEntries(
+  entity: EntityDefinition<any>,
+  stored: readonly StoredCatalogEntry[],
+): EntityCatalogEntry<any>[] {
+  return stored.map((entry) => ({
+    ...entry,
+    value: deserializeParameterValue(entity.schema, entry.value),
+  })) as EntityCatalogEntry<any>[];
+}
+
+/** Sets or clears the entity Siri sees as on screen. Resolves as a no-op where native lacks support. */
+export async function setOnscreenEntity(
+  nativeModule: AppIntentsNativeModule,
+  entity: EntityDefinition<any> | null,
+  id: string | null | undefined,
+): Promise<void> {
+  const active = entity !== null && id !== null && id !== undefined && id !== "";
+
+  await nativeModule.setOnscreenEntity?.(active ? entity.id : null, active ? id : null);
+}
+
+function isIos(): boolean {
+  if (typeof require !== "function") {
+    return false;
+  }
+
+  try {
+    return (require("react-native") as { Platform?: { OS?: string } }).Platform?.OS === "ios";
+  } catch {
+    return false;
+  }
+}
+
+/** Tells Siri which entity the screen shows (iOS 18.2+). A null or undefined id clears it. */
+export function useOnscreenEntity(
+  entity: EntityDefinition<any>,
+  id: string | null | undefined,
+): void {
+  if (typeof require !== "function") {
+    return;
+  }
+
+  const { useEffect } = require("react") as {
+    useEffect(effect: () => void | (() => void), deps: readonly unknown[]): void;
+  };
+  const entityId = entity.id;
+
+  useEffect(() => {
+    if (!isIos() || id === null || id === undefined || id === "") {
+      return;
+    }
+
+    const nativeModule = getNativeModule();
+    const clear = (): void => {
+      void setOnscreenEntity(nativeModule, null, null).catch(() => {});
+    };
+
+    void setOnscreenEntity(nativeModule, { id: entityId } as EntityDefinition<any>, id).catch(
+      () => {},
+    );
+
+    return clear;
+  }, [entityId, id]);
+}
+
 export interface AppIntentsRuntime<TIntents extends IntentTuple> {
+  getEntities<TEntity extends EntityDefinition<any>>(
+    entity: TEntity,
+  ): Promise<EntityCatalogEntry<TEntity>[]>;
+  reindexEntities(entity?: EntityDefinition<any>): Promise<void>;
+  setEntities<TEntity extends EntityDefinition<any>>(
+    entity: TEntity,
+    entries: readonly EntityCatalogEntry<TEntity>[],
+  ): Promise<void>;
   buildUrl<TIntent extends TIntents[number]>(intent: TIntent, params: ParamsOf<TIntent>): string;
   clearDonations(): Promise<void>;
   dispose(): void;
@@ -650,6 +821,38 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
       // The run stays stored and is delivered again on the next launch.
       liveInvocationIds.delete(invocationId);
     }
+  }
+
+  // Last catalog JSON native accepted, per entity; a missing key means "not read yet".
+  const publishedCatalogs = new Map<string, StoredCatalogEntry[]>();
+  const catalogQueues = new Map<string, Promise<unknown>>();
+
+  async function currentCatalog(entity: EntityDefinition<any>): Promise<StoredCatalogEntry[]> {
+    const known = publishedCatalogs.get(entity.id);
+
+    if (known) {
+      return known;
+    }
+
+    let stored: StoredCatalogEntry[] | null = null;
+
+    try {
+      stored = parseStoredCatalog(await nativeModule.getEntityCatalog?.(entity.id));
+    } catch {
+      // An unreadable store falls back to the static seed.
+    }
+
+    return stored ?? seedCatalog(entity);
+  }
+
+  function queueCatalogWork<T>(entityId: string, work: () => Promise<T>): Promise<T> {
+    const run = (catalogQueues.get(entityId) ?? Promise.resolve()).then(work, work);
+    catalogQueues.set(
+      entityId,
+      run.catch(() => {}),
+    );
+
+    return run;
   }
 
   function hasMatchingHandlers(event: IntentEventUnion<TIntents>): boolean {
@@ -778,6 +981,41 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
         JSON.stringify(serializedParams),
         capabilityBindings,
       );
+    },
+
+    async getEntities(entity) {
+      const stored = await queueCatalogWork(entity.id, () => currentCatalog(entity));
+
+      return toPublicEntries(entity, stored) as EntityCatalogEntry<typeof entity>[];
+    },
+
+    async reindexEntities(entity) {
+      await nativeModule.reindexEntities?.(entity?.id ?? null);
+    },
+
+    setEntities(entity, entries) {
+      let next: StoredCatalogEntry[];
+
+      try {
+        next = normalizeCatalog(entity, entries);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+
+      return queueCatalogWork(entity.id, async () => {
+        const json = JSON.stringify(next);
+        const known =
+          publishedCatalogs.get(entity.id) ??
+          parseStoredCatalog(await nativeModule.getEntityCatalog?.(entity.id).catch(() => null));
+
+        if (known && JSON.stringify(known) === json) {
+          publishedCatalogs.set(entity.id, known);
+          return;
+        }
+
+        await nativeModule.setEntityCatalog?.(entity.id, json);
+        publishedCatalogs.set(entity.id, next);
+      });
     },
 
     async getInitialIntent() {
