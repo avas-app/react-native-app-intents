@@ -578,20 +578,42 @@ RCT_REMAP_METHOD(
       return;
     }
 
-    if (view == nil) {
-      resolve(nil);
-      return;
-    }
-
     // The value is unique per tag, so a recycled view carrying another tag's value is not ours.
     NSString *value = [NSString stringWithFormat:@"%@|%@|%@", reactTag, entityId, itemId];
 
-    objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, value, OBJC_ASSOCIATION_COPY_NONATOMIC);
     ReactNativeAppIntentsTaggedValues[reactTag] = value;
-    [ReactNativeAppIntentsTaggedViews setObject:view forKey:reactTag];
-    ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, entityId, itemId);
+    [self applyEntityTag:reactTag value:value entityId:entityId itemId:itemId bridge:bridge selector:selector attemptsLeft:20];
     resolve(nil);
   });
+}
+
+// The effect runs before Fabric has mounted the native view, so retry until it exists or the tag is cleared.
+- (void)applyEntityTag:(NSNumber *)reactTag
+                 value:(NSString *)value
+              entityId:(NSString *)entityId
+                itemId:(NSString *)itemId
+                bridge:(Class)bridge
+              selector:(SEL)selector
+          attemptsLeft:(NSInteger)attemptsLeft
+{
+  if (![ReactNativeAppIntentsTaggedValues[reactTag] isEqualToString:value]) {
+    return;
+  }
+
+  UIView *view = [self viewForReactTag:reactTag];
+
+  if (view == nil) {
+    if (attemptsLeft > 0) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        [self applyEntityTag:reactTag value:value entityId:entityId itemId:itemId bridge:bridge selector:selector attemptsLeft:attemptsLeft - 1];
+      });
+    }
+    return;
+  }
+
+  objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, value, OBJC_ASSOCIATION_COPY_NONATOMIC);
+  [ReactNativeAppIntentsTaggedViews setObject:view forKey:reactTag];
+  ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, entityId, itemId);
 }
 
 + (void)recordIncomingURLString:(NSString *)url
