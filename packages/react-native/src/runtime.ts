@@ -682,11 +682,14 @@ export async function setOnscreenEntity(
   nativeModule: AppIntentsNativeModule,
   entity: EntityDefinition<any> | null,
   id: string | null | undefined,
+  token = "default",
 ): Promise<void> {
   const active = entity !== null && id !== null && id !== undefined && id !== "";
 
-  await nativeModule.setOnscreenEntity?.(active ? entity.id : null, active ? id : null);
+  await nativeModule.setOnscreenEntity?.(token, active ? entity.id : null, active ? id : null);
 }
+
+let nextOnscreenToken = 0;
 
 function isIos(): boolean {
   if (typeof require !== "function") {
@@ -709,24 +712,30 @@ export function useOnscreenEntity(
     return;
   }
 
-  const { useEffect } = require("react") as {
+  const { useEffect, useRef } = require("react") as {
     useEffect(effect: () => void | (() => void), deps: readonly unknown[]): void;
+    useRef<T>(initial: T): { current: T };
   };
   const entityId = entity.id;
+  const tokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isIos() || id === null || id === undefined || id === "") {
       return;
     }
 
+    const token = (tokenRef.current ??= `onscreen-${++nextOnscreenToken}`);
     const nativeModule = getNativeModule();
     const clear = (): void => {
-      void setOnscreenEntity(nativeModule, null, null).catch(() => {});
+      void setOnscreenEntity(nativeModule, null, null, token).catch(() => {});
     };
 
-    void setOnscreenEntity(nativeModule, { id: entityId } as EntityDefinition<any>, id).catch(
-      () => {},
-    );
+    void setOnscreenEntity(
+      nativeModule,
+      { id: entityId } as EntityDefinition<any>,
+      id,
+      token,
+    ).catch(() => {});
 
     return clear;
   }, [entityId, id]);
@@ -756,37 +765,77 @@ export function useAppEntityTag(
     return;
   }
 
-  const { useEffect } = require("react") as {
-    useEffect(effect: () => void | (() => void), deps: readonly unknown[]): void;
+  const { useEffect, useRef } = require("react") as {
+    useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void;
+    useRef<T>(initial: T): { current: T };
   };
   const entityId = entity.id;
+  const bound = useRef<{
+    target: unknown;
+    entityId: string;
+    id: string;
+    clear: () => void;
+  } | null>(null);
 
+  // Runs after every commit: ref.current can change or appear without entityId or id changing.
   // useEffect, not useLayoutEffect: the native view is not mounted yet in a layout effect.
   useEffect(() => {
-    if (!isIos() || id === null || id === undefined || id === "" || ref.current === null) {
+    const target = ref.current;
+    const active = isIos() && id !== null && id !== undefined && id !== "" && target != null;
+    const previous = bound.current;
+
+    if (
+      previous &&
+      active &&
+      previous.target === target &&
+      previous.entityId === entityId &&
+      previous.id === id
+    ) {
+      return;
+    }
+
+    if (previous) {
+      previous.clear();
+      bound.current = null;
+    }
+
+    if (!active) {
       return;
     }
 
     // findNodeHandle loads the Paper renderer on RN 0.85 and crashes the new architecture, so read the Fabric tag first.
-    const fabricTag = (ref.current as { __nativeTag?: unknown }).__nativeTag;
+    const fabricTag = (target as { __nativeTag?: unknown }).__nativeTag;
     const reactTag =
       typeof fabricTag === "number"
         ? fabricTag
         : (
             require("react-native") as { findNodeHandle(instance: unknown): number | null }
-          ).findNodeHandle(ref.current);
+          ).findNodeHandle(target);
 
     if (reactTag === null || reactTag === undefined) {
       return;
     }
 
-    return bindEntityTag(
-      getNativeModule(),
-      reactTag,
-      { id: entityId } as EntityDefinition<any>,
+    bound.current = {
+      target,
+      entityId,
       id,
-    );
-  }, [entityId, id, ref]);
+      clear: bindEntityTag(
+        getNativeModule(),
+        reactTag,
+        { id: entityId } as EntityDefinition<any>,
+        id,
+      ),
+    };
+  });
+
+  useEffect(
+    () => () => {
+      bound.current?.clear();
+      bound.current = null;
+    },
+    [],
+  );
 }
 
 export interface AppIntentsRuntime<TIntents extends IntentTuple> {
@@ -1061,9 +1110,10 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
 
       return queueCatalogWork(entity.id, async () => {
         const json = JSON.stringify(next);
+        const read = nativeModule.getSyncedEntityCatalog ?? nativeModule.getEntityCatalog;
         const known =
           publishedCatalogs.get(entity.id) ??
-          parseStoredCatalog(await nativeModule.getEntityCatalog?.(entity.id).catch(() => null));
+          parseStoredCatalog(await read?.call(nativeModule, entity.id).catch(() => null));
 
         if (known && JSON.stringify(known) === json) {
           publishedCatalogs.set(entity.id, known);

@@ -39,8 +39,8 @@ function createNative(stored: string | null = null) {
     async setEntityTag(tag: number, entityId: string | null, id: string | null) {
       calls.push(["tag", tag, entityId, id]);
     },
-    async setOnscreenEntity(entityId: string | null, id: string | null) {
-      calls.push(["onscreen", entityId, id]);
+    async setOnscreenEntity(token: string, entityId: string | null, id: string | null) {
+      calls.push(["onscreen", token, entityId, id]);
     },
   };
   return { calls, native, failNext: () => (failNext = true), store: () => store };
@@ -162,13 +162,62 @@ test("without the native methods everything still resolves", async () => {
 test("setOnscreenEntity sends the entity and id, and null clears", async () => {
   const { native, calls } = createNative();
 
-  await setOnscreenEntity(native, order, "4521");
-  await setOnscreenEntity(native, order, null);
+  await setOnscreenEntity(native, order, "4521", "a");
+  await setOnscreenEntity(native, order, null, "a");
 
   assert.deepEqual(calls, [
-    ["onscreen", "order", "4521"],
-    ["onscreen", null, null],
+    ["onscreen", "a", "order", "4521"],
+    ["onscreen", "a", null, null],
   ]);
+});
+
+test("setEntities retries when the synced copy differs from the stored catalog", async () => {
+  const calls: unknown[][] = [];
+  const native: AppIntentsNativeModule = {
+    async clearDonations() {},
+    async donate() {},
+    async updateDynamicShortcuts() {},
+    async getEntityCatalog() {
+      return JSON.stringify([{ id: "1", title: "One", value: { orderNumber: "1" } }]);
+    },
+    async getSyncedEntityCatalog() {
+      return null;
+    },
+    async setEntityCatalog(entityId: string, json: string) {
+      calls.push(["set", entityId, json]);
+    },
+  };
+
+  await runtimeFor(native).setEntities(order, [
+    { id: "1", title: "One", value: { orderNumber: "1" } },
+  ]);
+
+  assert.equal(calls.length, 1);
+});
+
+test("setEntities skips when the synced copy matches", async () => {
+  const json = JSON.stringify([{ id: "1", title: "One", value: { orderNumber: "1" } }]);
+  const calls: unknown[][] = [];
+  const native: AppIntentsNativeModule = {
+    async clearDonations() {},
+    async donate() {},
+    async updateDynamicShortcuts() {},
+    async getEntityCatalog() {
+      return json;
+    },
+    async getSyncedEntityCatalog() {
+      return json;
+    },
+    async setEntityCatalog(entityId: string, next: string) {
+      calls.push(["set", entityId, next]);
+    },
+  };
+
+  await runtimeFor(native).setEntities(order, [
+    { id: "1", title: "One", value: { orderNumber: "1" } },
+  ]);
+
+  assert.equal(calls.length, 0);
 });
 
 test("bindEntityTag sets the tag, and cleanup clears it with the saved tag", () => {
