@@ -1,5 +1,6 @@
 package com.reactnativeappintents
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -8,6 +9,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -17,12 +19,27 @@ import com.facebook.react.bridge.ReadableMap
 import java.lang.ref.WeakReference
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.UUID
 
 class ReactNativeAppIntentsModule(
   reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
+  private val activityEventListener = object : BaseActivityEventListener() {
+    override fun onNewIntent(intent: Intent) {
+      handleIntent(intent)
+    }
+  }
+
   init {
     reactContextRef = WeakReference(reactContext)
+    reactContext.addActivityEventListener(activityEventListener)
+    recordLaunchIntent()
+  }
+
+  // Covers apps whose MainActivity never calls handleIntent (e.g. Expo).
+  private fun recordLaunchIntent() {
+    val activity: Activity = reactApplicationContext.currentActivity ?: return
+    recordIntent(activity.intent, false)
   }
 
   override fun getName(): String = NAME
@@ -94,8 +111,25 @@ class ReactNativeAppIntentsModule(
 
   @ReactMethod
   fun getInitialIntentURL(promise: Promise) {
-    val currentUrl = if (pendingUrls.isEmpty()) null else pendingUrls.removeFirst()
-    promise.resolve(currentUrl)
+    recordLaunchIntent()
+    promise.resolve(synchronized(pendingUrls) { pendingUrls.firstOrNull() })
+  }
+
+  @ReactMethod
+  fun getPendingIntentURLs(promise: Promise) {
+    recordLaunchIntent()
+    val urls = synchronized(pendingUrls) { pendingUrls.toList() }
+    val result = com.facebook.react.bridge.Arguments.createArray()
+    urls.forEach { result.pushString(it) }
+    promise.resolve(result)
+  }
+
+  @ReactMethod
+  fun acknowledgeIntent(invocationId: String, promise: Promise) {
+    synchronized(pendingUrls) {
+      pendingUrls.removeAll { Uri.parse(it).getQueryParameter(INVOCATION_ID_PARAM) == invocationId }
+    }
+    promise.resolve(null)
   }
 
   @ReactMethod
@@ -279,25 +313,60 @@ class ReactNativeAppIntentsModule(
     private const val DYNAMIC_SHORTCUT_IDS_KEY = "dynamicShortcutIds"
     private const val PREFERENCES_NAME = "ReactNativeAppIntents"
     private val ANDROID_SHORTCUT_ICON_PATTERN = Regex("^@(drawable|mipmap)/([A-Za-z0-9_]+)$")
+    private const val RECORDED_EXTRA = "com.reactnativeappintents.recorded"
+    private const val INVOCATION_ID_PARAM = "invocationId"
+    private const val MAX_PENDING_URLS = 100
     private val pendingUrls = ArrayDeque<String>()
     private var reactContextRef: WeakReference<ReactApplicationContext>? = null
 
     fun handleIntent(intent: Intent?) {
+      recordIntent(intent, true)
+    }
+
+    private fun recordIntent(intent: Intent?, emit: Boolean) {
       val uri = intent?.data ?: return
 
       if (uri.host != "app-intents") {
         return
       }
 
-      handleUrl(uri.toString())
+      // Each Intent is recorded once, whether via the listener, launch read or handleIntent.
+      synchronized(pendingUrls) {
+        if (intent.getBooleanExtra(RECORDED_EXTRA, false)) {
+          return
+        }
+        intent.putExtra(RECORDED_EXTRA, true)
+      }
+
+      handleUrl(uri.toString(), emit)
     }
 
-    private fun handleUrl(url: String?) {
-      if (url == null) {
+    private fun handleUrl(rawUrl: String?, emit: Boolean) {
+      if (rawUrl == null) {
         return
       }
 
-      pendingUrls.addLast(url)
+      val uri = Uri.parse(rawUrl)
+      val url = if (uri.getQueryParameter(INVOCATION_ID_PARAM) == null) {
+        uri.buildUpon()
+          .appendQueryParameter(INVOCATION_ID_PARAM, UUID.randomUUID().toString())
+          .build()
+          .toString()
+      } else {
+        rawUrl
+      }
+
+      synchronized(pendingUrls) {
+        pendingUrls.addLast(url)
+
+        while (pendingUrls.size > MAX_PENDING_URLS) {
+          pendingUrls.removeFirst()
+        }
+      }
+
+      if (!emit) {
+        return
+      }
 
       val reactContext = reactContextRef?.get() ?: return
       val payload = com.facebook.react.bridge.Arguments.createMap().apply {

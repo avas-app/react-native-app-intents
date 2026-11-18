@@ -48,8 +48,18 @@ export interface CreateAppIntentsRuntimeOptions<TIntents extends IntentTuple> {
   nativeModule?: AppIntentsNativeModule;
 }
 
-const INITIAL_NATIVE_URL_POLL_ATTEMPTS = 240;
-const INITIAL_NATIVE_URL_POLL_INTERVAL_MS = 250;
+const SEEN_INVOCATION_LIMIT = 100;
+
+function getInvocationId(url: string): string | null {
+  const queryStart = url.indexOf("?");
+
+  return queryStart < 0 ? null : new URLSearchParams(url.slice(queryStart + 1)).get("invocationId");
+}
+
+interface QueuedEvent<TIntents extends IntentTuple> {
+  event: IntentEventUnion<TIntents>;
+  invocationId: string | null;
+}
 
 interface RuntimeContext<TIntents extends IntentTuple> {
   scheme: string;
@@ -105,6 +115,7 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       ): { remove(): void };
     };
     Linking: LinkingAdapter;
+    Platform?: { OS?: string };
     NativeModules: {
       ReactNativeAppIntents?: AppIntentsNativeModule;
     };
@@ -112,32 +123,47 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
   };
   const nativeModule = providedNativeModule ?? getReactNativeAppIntentsModule(reactNative);
   const nativeEmitter = nativeModule ? new reactNative.NativeEventEmitter(nativeModule) : null;
+  // With a pending list, native is the single source for app-intents runs; Linking carries a copy without the id.
+  const nativeOwnsIntents = Boolean(nativeModule?.getPendingIntentURLs);
+  // iOS openURL links never reach the native queue, so there Linking is their only copy.
+  const dropLinkingIntentUrls = nativeOwnsIntents && reactNative.Platform?.OS === "android";
+  const isIntentHostUrl = (url: string | null | undefined): boolean =>
+    typeof url === "string" && /^[^:/?#]+:\/\/app-intents(?:[/?#]|$)/.test(url);
+
+  // An old module pops one run per read; keep the first so getInitialURL and the listener both see it.
+  let oldModuleInitialUrl: Promise<string | null> | null = null;
+  const readOldModuleInitialUrl = (): Promise<string | null> => {
+    oldModuleInitialUrl ??= Promise.resolve(nativeModule?.getInitialIntentURL?.() ?? null);
+
+    return oldModuleInitialUrl;
+  };
+  let oldModuleInitialEmitted = false;
 
   return {
     addEventListener(_event, listener) {
       const subscriptions: { remove(): void }[] = [];
-      let pollTimeout: ReturnType<typeof setTimeout> | null = null;
-      let remainingPollAttempts = INITIAL_NATIVE_URL_POLL_ATTEMPTS;
-      const emitPendingNativeUrl = async (): Promise<void> => {
-        if (!nativeModule?.getInitialIntentURL) {
-          return;
-        }
+      const emitPendingNativeUrls = async (): Promise<void> => {
+        try {
+          if (nativeModule?.getPendingIntentURLs) {
+            for (const url of await nativeModule.getPendingIntentURLs()) {
+              listener({ url });
+            }
+          } else if (nativeModule?.getInitialIntentURL) {
+            const first = oldModuleInitialEmitted ? null : await readOldModuleInitialUrl();
+            oldModuleInitialEmitted = true;
 
-        const url = await nativeModule.getInitialIntentURL();
+            if (first) {
+              listener({ url: first });
+            }
 
-        if (url) {
-          listener({ url });
+            for (let url = await nativeModule.getInitialIntentURL(); url; ) {
+              listener({ url });
+              url = await nativeModule.getInitialIntentURL();
+            }
+          }
+        } catch {
+          // A failed read is retried on the next AppState "active".
         }
-      };
-      const schedulePendingNativeUrlPoll = (): void => {
-        if (remainingPollAttempts <= 0) {
-          return;
-        }
-
-        pollTimeout = setTimeout(() => {
-          remainingPollAttempts -= 1;
-          void emitPendingNativeUrl().finally(schedulePendingNativeUrlPoll);
-        }, INITIAL_NATIVE_URL_POLL_INTERVAL_MS);
       };
 
       if (nativeEmitter) {
@@ -147,28 +173,36 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       subscriptions.push(
         reactNative.AppState.addEventListener("change", (state) => {
           if (state === "active") {
-            void emitPendingNativeUrl();
+            void emitPendingNativeUrls();
           }
         }),
       );
-      subscriptions.push(reactNative.Linking.addEventListener("url", listener));
-      void emitPendingNativeUrl();
-      schedulePendingNativeUrlPoll();
+      subscriptions.push(
+        reactNative.Linking.addEventListener("url", (event) => {
+          if (dropLinkingIntentUrls && isIntentHostUrl(event.url)) {
+            return;
+          }
+
+          listener(event);
+        }),
+      );
+      void emitPendingNativeUrls();
 
       return {
         remove(): void {
-          if (pollTimeout) {
-            clearTimeout(pollTimeout);
-            pollTimeout = null;
-          }
-
           subscriptions.forEach((subscription) => subscription.remove());
         },
       };
     },
     async getInitialURL(): Promise<string | null> {
+      if (nativeOwnsIntents) {
+        const linkingUrl = await reactNative.Linking.getInitialURL();
+
+        return dropLinkingIntentUrls && isIntentHostUrl(linkingUrl) ? null : linkingUrl;
+      }
+
       if (nativeModule?.getInitialIntentURL) {
-        const url = await nativeModule.getInitialIntentURL();
+        const url = await readOldModuleInitialUrl();
 
         if (url) {
           return url;
@@ -568,22 +602,71 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
     Set<(event: IntentEventUnion<TIntents>) => MaybePromise>
   >();
   const initialUrlPromise = linking.getInitialURL();
-  let initialUrlHandled = false;
-  const pendingEvents: IntentEventUnion<TIntents>[] = [];
+  const pendingEvents: QueuedEvent<TIntents>[] = [];
   let flushingPendingEvents = false;
   let lastHandledUrl: string | null = null;
+  const seenInvocationIds = new Set<string>();
+  // Queued or running ids stay here unbounded until acked, so the bounded set can't evict them.
+  const liveInvocationIds = new Set<string>();
+
+  function isKnown(invocationId: string): boolean {
+    return seenInvocationIds.has(invocationId) || liveInvocationIds.has(invocationId);
+  }
+
+  function markSeen(invocationId: string | null): void {
+    if (!invocationId) {
+      return;
+    }
+
+    seenInvocationIds.add(invocationId);
+    liveInvocationIds.add(invocationId);
+
+    if (seenInvocationIds.size > SEEN_INVOCATION_LIMIT) {
+      const oldest = seenInvocationIds.values().next().value;
+
+      if (oldest !== undefined) {
+        seenInvocationIds.delete(oldest);
+      }
+    }
+  }
+
+  function acknowledge(invocationId: string | null): void {
+    if (!invocationId) {
+      return;
+    }
+
+    if (!nativeModule.acknowledgeIntent) {
+      liveInvocationIds.delete(invocationId);
+      return;
+    }
+
+    try {
+      void Promise.resolve(nativeModule.acknowledgeIntent(invocationId))
+        .catch(() => {})
+        .then(() => {
+          liveInvocationIds.delete(invocationId);
+        });
+    } catch {
+      // The run stays stored and is delivered again on the next launch.
+      liveInvocationIds.delete(invocationId);
+    }
+  }
 
   function hasMatchingHandlers(event: IntentEventUnion<TIntents>): boolean {
     return anyIntentHandlers.size > 0 || (intentHandlers.get(event.id)?.size ?? 0) > 0;
   }
 
-  async function deliverEvent(event: IntentEventUnion<TIntents>): Promise<void> {
-    for (const handler of anyIntentHandlers) {
-      await handler(event);
-    }
+  async function deliverQueuedEvent(queued: QueuedEvent<TIntents>): Promise<void> {
+    try {
+      for (const handler of anyIntentHandlers) {
+        await handler(queued.event);
+      }
 
-    for (const handler of intentHandlers.get(event.id) ?? []) {
-      await handler(event);
+      for (const handler of intentHandlers.get(queued.event.id) ?? []) {
+        await handler(queued.event);
+      }
+    } finally {
+      acknowledge(queued.invocationId);
     }
   }
 
@@ -595,16 +678,21 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
     flushingPendingEvents = true;
 
     try {
-      const remainingEvents: IntentEventUnion<TIntents>[] = [];
+      const remainingEvents: QueuedEvent<TIntents>[] = [];
 
-      for (const event of pendingEvents.splice(0)) {
-        if (!hasMatchingHandlers(event)) {
-          remainingEvents.push(event);
+      for (const queued of pendingEvents.splice(0)) {
+        if (!hasMatchingHandlers(queued.event)) {
+          remainingEvents.push(queued);
           continue;
         }
 
-        lastHandledUrl = event.url;
-        await deliverEvent(event);
+        lastHandledUrl = queued.event.url;
+
+        try {
+          await deliverQueuedEvent(queued);
+        } catch (error) {
+          console.error(error);
+        }
       }
 
       pendingEvents.unshift(...remainingEvents);
@@ -614,29 +702,36 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
   }
 
   async function dispatch(url: string): Promise<void> {
-    const initialUrl = await initialUrlPromise;
+    await initialUrlPromise;
     const event = parseIntentUrl(context, url);
+    const invocationId = getInvocationId(url);
 
-    if (
-      !event ||
-      lastHandledUrl === url ||
-      pendingEvents.some((pendingEvent) => pendingEvent.url === url) ||
-      (!initialUrlHandled && initialUrl === url)
-    ) {
+    if (!event) {
       return;
     }
 
+    if (invocationId) {
+      if (isKnown(invocationId)) {
+        return;
+      }
+    } else if (lastHandledUrl === url || pendingEvents.some((queued) => queued.event.url === url)) {
+      return;
+    }
+
+    markSeen(invocationId);
+    const queued = { event, invocationId };
+
     if (!hasMatchingHandlers(event)) {
-      pendingEvents.push(event);
+      pendingEvents.push(queued);
       return;
     }
 
     lastHandledUrl = url;
-    await deliverEvent(event);
+    await deliverQueuedEvent(queued);
   }
 
   const subscription = linking.addEventListener("url", (event) => {
-    void dispatch(event.url);
+    dispatch(event.url).catch((error) => console.error(error));
   });
 
   function addIntentHandler(
@@ -686,19 +781,46 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
     },
 
     async getInitialIntent() {
-      initialUrlHandled = true;
+      const pending = pendingEvents.shift();
 
-      const pendingEvent = pendingEvents.shift();
-
-      if (pendingEvent) {
-        lastHandledUrl = pendingEvent.url;
+      if (pending) {
+        lastHandledUrl = pending.event.url;
+        acknowledge(pending.invocationId);
         void flushPendingEvents();
-        return pendingEvent;
+        return pending.event;
+      }
+
+      if (nativeModule.getPendingIntentURLs) {
+        try {
+          for (const nativeUrl of await nativeModule.getPendingIntentURLs()) {
+            const nativeId = getInvocationId(nativeUrl);
+            const nativeEvent = parseIntentUrl(context, nativeUrl);
+
+            if (nativeEvent && !(nativeId && isKnown(nativeId))) {
+              lastHandledUrl = nativeUrl;
+              markSeen(nativeId);
+              acknowledge(nativeId);
+              // An iOS cold-start openURL link has no id and is not in the native list; deliver it too.
+              void initialUrlPromise
+                .then((linkingUrl) => {
+                  if (linkingUrl && !getInvocationId(linkingUrl)) {
+                    return dispatch(linkingUrl);
+                  }
+                })
+                .catch((error) => console.error(error));
+              void flushPendingEvents();
+              return nativeEvent;
+            }
+          }
+        } catch {
+          // Fall through to the linking URL.
+        }
       }
 
       const url = await initialUrlPromise;
+      const invocationId = url ? getInvocationId(url) : null;
 
-      if (!url || lastHandledUrl === url) {
+      if (!url || lastHandledUrl === url || (invocationId && isKnown(invocationId))) {
         void flushPendingEvents();
         return null;
       }
@@ -707,6 +829,8 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
 
       if (event) {
         lastHandledUrl = url;
+        markSeen(invocationId);
+        acknowledge(invocationId);
       }
 
       void flushPendingEvents();
