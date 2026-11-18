@@ -229,6 +229,83 @@ function serializeObjectParameterValue(
   return serialized;
 }
 
+/**
+ * Checks a value against a parameter definition and returns the first problem, or `null` when it
+ * matches. Used for runtime entity catalog entries before they are stored.
+ */
+export function validateParameterValue(
+  definition: AnyParameterDefinition,
+  value: unknown,
+  path: string,
+): string | null {
+  if (value === undefined || value === null) {
+    return definition.optional === true ? null : `field "${path}" is required`;
+  }
+
+  switch (definition.kind) {
+    case "string":
+      return typeof value === "string" ? null : `field "${path}" must be a string`;
+    case "int":
+      return typeof value === "number" && Number.isInteger(value)
+        ? null
+        : `field "${path}" must be an integer`;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+        ? null
+        : `field "${path}" must be a number`;
+    case "bool":
+      return typeof value === "boolean" ? null : `field "${path}" must be a boolean`;
+    case "date":
+      return value instanceof Date && !Number.isNaN(value.getTime())
+        ? null
+        : `field "${path}" must be a Date`;
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return `field "${path}" must be an object`;
+      }
+
+      for (const [key, field] of Object.entries(definition.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        const issue = validateParameterValue(
+          field,
+          (value as Record<string, unknown>)[key],
+          `${path}.${key}`,
+        );
+
+        if (issue) {
+          return issue;
+        }
+      }
+
+      return null;
+    }
+    case "entity": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return `field "${path}" must be an object`;
+      }
+
+      for (const [key, field] of Object.entries(definition.entity.schema.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        const issue = validateParameterValue(
+          field,
+          (value as Record<string, unknown>)[key],
+          `${path}.${key}`,
+        );
+
+        if (issue) {
+          return issue;
+        }
+      }
+
+      return null;
+    }
+  }
+}
+
 function normalizeParameterMetadata(
   name: string,
   definition: AnyParameterDefinition,

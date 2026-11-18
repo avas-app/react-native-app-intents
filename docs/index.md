@@ -463,7 +463,8 @@ const orders = await appIntents.getEntities(order);
 `setEntities` checks that every entry has a non-empty `id` and `title` and a unique
 `id`; a bad entry rejects and leaves the stored catalog unchanged. Publishing a
 catalog equal to the current one is a no-op, so calling `setEntities` on every
-launch is safe. Static `inventory` seeds the catalog until the first `setEntities`.
+launch is safe. Static `inventory` seeds Siri and Shortcuts, but a Spotlight entity
+is not indexed until the first `setEntities` or `reindexEntities`.
 The catalog is stored natively in `UserDefaults`, so keep it to the rows Siri
 needs. Clear it on logout with `setEntities(order, [])`.
 
@@ -488,9 +489,9 @@ export const order = defineEntity({
 parameter of this entity. Spotlight requires `catalog: "runtime"`. An entry with
 `hideInSpotlight: true` stays resolvable but is not indexed. Indexing follows the
 published catalog: added and changed entries are indexed, removed entries are
-deleted. `reindexEntities(entity)` rebuilds the index for one entity, or for every
-spotlight entity when called with no argument; use it only to recover from a
-system-evicted index.
+deleted. `reindexEntities(entity)` forces a full rebuild of the index for one entity,
+or for every spotlight entity when called with no argument, for example after a
+failed sync. A system-evicted index is rebuilt automatically.
 
 ## Onscreen entity
 

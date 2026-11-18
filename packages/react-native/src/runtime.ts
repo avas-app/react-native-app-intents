@@ -1,3 +1,4 @@
+import { validateParameterValue } from "./core/index.js";
 import type {
   AnyParameterDefinition,
   DynamicShortcutIcon,
@@ -613,6 +614,12 @@ function normalizeCatalog(
     }
 
     seen.add(entry.id);
+
+    const issue = validateParameterValue(entity.schema, entry.value, "value");
+
+    if (issue) {
+      throw new TypeError(`setEntities(${entity.id}): entry "${entry.id}": ${issue}`);
+    }
 
     const stored: StoredCatalogEntry = {
       id: entry.id,

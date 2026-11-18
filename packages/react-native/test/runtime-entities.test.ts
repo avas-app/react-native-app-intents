@@ -3,7 +3,12 @@ import test from "node:test";
 
 import { defineEntity, p } from "../src/core/index.js";
 import type { AppIntentsNativeModule } from "../src/native.js";
-import { bindEntityTag, createAppIntentsRuntime, setOnscreenEntity } from "../src/index.js";
+import {
+  bindEntityTag,
+  createAppIntentsRuntime,
+  setOnscreenEntity,
+  type EntityCatalogEntry,
+} from "../src/index.js";
 
 const order = defineEntity({
   id: "order",
@@ -113,6 +118,25 @@ test("setEntities rejects bad entries and keeps the old catalog", async () => {
   ]) {
     await assert.rejects(runtime.setEntities(order, bad));
   }
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(await runtime.getEntities(order), good);
+});
+
+test("setEntities rejects entries whose value does not match the schema", async () => {
+  const { native, calls } = createNative();
+  const runtime = runtimeFor(native);
+  const good = [{ id: "1", title: "One", value: { orderNumber: "1" } }];
+
+  await runtime.setEntities(order, good);
+
+  const missingValue = [{ id: "2", title: "Two" }] as unknown as EntityCatalogEntry<typeof order>[];
+  const wrongType = [
+    { id: "2", title: "Two", value: { orderNumber: 2 } },
+  ] as unknown as EntityCatalogEntry<typeof order>[];
+
+  await assert.rejects(runtime.setEntities(order, missingValue));
+  await assert.rejects(runtime.setEntities(order, wrongType));
 
   assert.equal(calls.length, 1);
   assert.deepEqual(await runtime.getEntities(order), good);

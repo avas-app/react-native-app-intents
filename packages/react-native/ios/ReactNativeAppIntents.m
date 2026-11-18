@@ -526,10 +526,13 @@ static NSMutableDictionary<NSNumber *, NSString *> *ReactNativeAppIntentsTaggedV
   }
 
   // Old architecture: the bridge's UIManager owns the registry.
-  id uiManager = [self.bridge valueForKey:@"uiManager"];
+  SEL uiManagerSelector = NSSelectorFromString(@"uiManager");
+  id uiManager = [self.bridge respondsToSelector:uiManagerSelector]
+    ? ((id (*)(id, SEL))objc_msgSend)(self.bridge, uiManagerSelector)
+    : nil;
 
   return [uiManager respondsToSelector:selector]
-    ? ((UIView * (*)(id, SEL, NSNumber *)) objc_msgSend)(uiManager, selector, reactTag)
+    ? ((UIView * (*)(id, SEL, NSNumber *))objc_msgSend)(uiManager, selector, reactTag)
     : nil;
 }
 
