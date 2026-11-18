@@ -56,26 +56,112 @@ static NSString *ReactNativeAppIntentsEnsureInvocationID(NSString *url)
   return components.string ?: url;
 }
 
-// UserDefaults is the only store: runs stay there until JS acknowledges them.
+// One UserDefaults key per run (<prefix><invocationId>) so the Swift enqueue and this file never
+// overwrite each other's writes. Everything that changes or lists runs holds one lock.
+static NSString *const ReactNativeAppIntentsRunKeyPrefix = @"ReactNativeAppIntentsPendingURLs.";
+static NSString *const ReactNativeAppIntentsEnqueuedNotification = @"ReactNativeAppIntentsDidEnqueue";
+
+static NSObject *ReactNativeAppIntentsLock(void)
+{
+  static NSObject *lock;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ lock = [NSObject new]; });
+  return lock;
+}
+
+static void ReactNativeAppIntentsStoreRun(NSUserDefaults *defaults, NSString *url, NSTimeInterval createdAt)
+{
+  NSString *invocationId = ReactNativeAppIntentsInvocationID(url);
+
+  if (invocationId.length == 0) {
+    return;
+  }
+
+  [defaults setObject:@{ @"url": url, @"createdAt": @(createdAt) }
+               forKey:[ReactNativeAppIntentsRunKeyPrefix stringByAppendingString:invocationId]];
+}
+
+// Caller holds the lock. Moves the old single-array key into per-run keys, once.
+static void ReactNativeAppIntentsMigrateLegacy(NSUserDefaults *defaults)
+{
+  NSArray<NSString *> *legacy = [defaults stringArrayForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+
+  if (legacy == nil) {
+    return;
+  }
+
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+
+  for (NSUInteger index = 0; index < legacy.count; index++) {
+    ReactNativeAppIntentsStoreRun(
+      defaults, ReactNativeAppIntentsEnsureInvocationID(legacy[index]), now - 1000.0 + index * 0.001);
+  }
+
+  [defaults removeObjectForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+}
+
+// Caller holds the lock. Oldest first, as {key, url}.
+static NSArray<NSDictionary *> *ReactNativeAppIntentsListRuns(NSUserDefaults *defaults)
+{
+  NSMutableArray<NSDictionary *> *runs = [NSMutableArray new];
+
+  for (NSString *key in [defaults dictionaryRepresentation]) {
+    if (![key hasPrefix:ReactNativeAppIntentsRunKeyPrefix]) {
+      continue;
+    }
+
+    id value = [defaults objectForKey:key];
+    NSString *url = [value isKindOfClass:[NSDictionary class]] ? value[@"url"] : nil;
+
+    if (![url isKindOfClass:[NSString class]]) {
+      continue;
+    }
+
+    [runs addObject:@{ @"key": key, @"url": url, @"createdAt": value[@"createdAt"] ?: @0 }];
+  }
+
+  [runs sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+    NSComparisonResult order = [left[@"createdAt"] compare:right[@"createdAt"]];
+    return order != NSOrderedSame ? order : [left[@"key"] compare:right[@"key"]];
+  }];
+
+  return runs;
+}
+
+// Caller holds the lock.
+static void ReactNativeAppIntentsTrim(NSUserDefaults *defaults)
+{
+  NSArray<NSDictionary *> *runs = ReactNativeAppIntentsListRuns(defaults);
+
+  for (NSUInteger index = 0; index + ReactNativeAppIntentsMaxPendingURLs < runs.count; index++) {
+    [defaults removeObjectForKey:runs[index][@"key"]];
+  }
+}
+
+// Read-only: lists the newest runs, oldest first.
 static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
 {
-  NSArray<NSString *> *urls =
-    [ReactNativeAppIntentsUserDefaults() stringArrayForKey:ReactNativeAppIntentsPendingURLsDefaultsKey] ?: @[];
-  NSMutableArray<NSString *> *normalized = [NSMutableArray arrayWithCapacity:urls.count];
-  BOOL changed = NO;
+  @synchronized(ReactNativeAppIntentsLock()) {
+    NSUserDefaults *defaults = ReactNativeAppIntentsUserDefaults();
+    ReactNativeAppIntentsMigrateLegacy(defaults);
+    NSArray<NSDictionary *> *runs = ReactNativeAppIntentsListRuns(defaults);
+    NSUInteger skip = runs.count > ReactNativeAppIntentsMaxPendingURLs
+      ? runs.count - ReactNativeAppIntentsMaxPendingURLs
+      : 0;
+    NSMutableArray<NSString *> *urls = [NSMutableArray arrayWithCapacity:runs.count - skip];
 
-  for (NSString *url in urls) {
-    NSString *withId = ReactNativeAppIntentsEnsureInvocationID(url);
-    changed = changed || ![withId isEqualToString:url];
-    [normalized addObject:withId];
+    for (NSUInteger index = skip; index < runs.count; index++) {
+      [urls addObject:runs[index][@"url"]];
+    }
+
+    return urls;
   }
-
-  if (changed) {
-    [ReactNativeAppIntentsUserDefaults() setObject:normalized forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
-  }
-
-  return normalized;
 }
+
+@interface ReactNativeAppIntents ()
+@property (nonatomic, assign) BOOL observing;
+@property (nonatomic, strong) id enqueueObserver;
+@end
 
 @implementation ReactNativeAppIntents
 
@@ -87,6 +173,17 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
   if (self) {
     ReactNativeAppIntentsCurrentModule = self;
+    __weak ReactNativeAppIntents *weakSelf = self;
+    // Swift posts this after writing a run, so a foreground run reaches JS without an AppState change.
+    self.enqueueObserver = [[NSNotificationCenter defaultCenter]
+      addObserverForName:ReactNativeAppIntentsEnqueuedNotification
+      object:nil
+      queue:nil
+      usingBlock:^(NSNotification *_Nonnull note) {
+        if (weakSelf.observing) {
+          [weakSelf emitPendingIntentURLs];
+        }
+      }];
   }
 
   return self;
@@ -99,6 +196,10 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
 - (void)dealloc
 {
+  if (self.enqueueObserver != nil) {
+    [[NSNotificationCenter defaultCenter] removeObserver:self.enqueueObserver];
+  }
+
   if (ReactNativeAppIntentsCurrentModule == self) {
     ReactNativeAppIntentsCurrentModule = nil;
   }
@@ -111,7 +212,12 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
 - (void)startObserving
 {
-  [self emitPendingIntentURLs];
+  self.observing = YES;
+}
+
+- (void)stopObserving
+{
+  self.observing = NO;
 }
 
 RCT_REMAP_METHOD(
@@ -199,16 +305,15 @@ RCT_REMAP_METHOD(
   rejecter:(RCTPromiseRejectBlock)reject
 )
 {
-  @synchronized([ReactNativeAppIntents class]) {
-    NSMutableArray<NSString *> *urls = [ReactNativeAppIntentsPendingURLsSnapshot() mutableCopy];
+  @synchronized(ReactNativeAppIntentsLock()) {
+    NSUserDefaults *defaults = ReactNativeAppIntentsUserDefaults();
+    ReactNativeAppIntentsMigrateLegacy(defaults);
 
-    for (NSInteger index = (NSInteger)urls.count - 1; index >= 0; index--) {
-      if ([ReactNativeAppIntentsInvocationID(urls[index]) isEqualToString:invocationId]) {
-        [urls removeObjectAtIndex:index];
-      }
+    if (invocationId.length > 0) {
+      [defaults removeObjectForKey:[ReactNativeAppIntentsRunKeyPrefix stringByAppendingString:invocationId]];
     }
 
-    [ReactNativeAppIntentsUserDefaults() setObject:urls forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+    ReactNativeAppIntentsTrim(defaults);
   }
 
   resolve(nil);
@@ -266,15 +371,11 @@ RCT_REMAP_METHOD(
 
   NSString *stored = ReactNativeAppIntentsEnsureInvocationID(url);
 
-  @synchronized([ReactNativeAppIntents class]) {
-    NSMutableArray<NSString *> *urls = [ReactNativeAppIntentsPendingURLsSnapshot() mutableCopy];
-    [urls addObject:stored];
-
-    if (urls.count > ReactNativeAppIntentsMaxPendingURLs) {
-      [urls removeObjectsInRange:NSMakeRange(0, urls.count - ReactNativeAppIntentsMaxPendingURLs)];
-    }
-
-    [ReactNativeAppIntentsUserDefaults() setObject:urls forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+  @synchronized(ReactNativeAppIntentsLock()) {
+    NSUserDefaults *defaults = ReactNativeAppIntentsUserDefaults();
+    ReactNativeAppIntentsMigrateLegacy(defaults);
+    ReactNativeAppIntentsStoreRun(defaults, stored, [[NSDate date] timeIntervalSince1970]);
+    ReactNativeAppIntentsTrim(defaults);
   }
 
   [ReactNativeAppIntentsCurrentModule sendEventWithName:@"appIntentUrl" body:@{ @"url": stored }];

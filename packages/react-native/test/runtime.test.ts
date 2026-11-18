@@ -643,3 +643,61 @@ test("an unacknowledged run is delivered again to a fresh runtime", async () => 
   assert.deepEqual(native.acked, ["lost"]);
   assert.deepEqual(native.stored, []);
 });
+
+test("runtime keeps an in-flight run known after more than 100 other runs", async () => {
+  const native = createFakeNative();
+  const linking = createLinkingAdapter();
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: native.module as never,
+  });
+  const base = buildIntentUrl("example", pingIntent, {});
+  let calls = 0;
+  let release: () => void = () => {};
+  runtime.onIntent(pingIntent, (_params, event) => {
+    calls += 1;
+
+    if (event.url.endsWith("slow")) {
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }
+  });
+
+  linking.emit(withInvocation(base, "slow"));
+  await settle();
+
+  for (let index = 0; index < 150; index++) {
+    linking.emit(withInvocation(base, `n${index}`));
+  }
+
+  await settle();
+  const before = calls;
+  linking.emit(withInvocation(base, "slow"));
+  await settle();
+
+  assert.equal(calls, before);
+  release();
+});
+
+test("runtime keeps a cold-start run for onIntent when the linking adapter reports it as initial", async () => {
+  const url = withInvocation(buildIntentUrl("example", pingIntent, {}), "cold");
+  const linking = createLinkingAdapter(url);
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: createFakeNative().module as never,
+  });
+  linking.emit(url);
+  await settle();
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  await settle();
+
+  assert.equal(calls, 1);
+});
