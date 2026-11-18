@@ -2,7 +2,6 @@
 
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
-#import <React/RCTViewRegistry.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -245,7 +244,10 @@ RCT_REMAP_METHOD(
 )
 {
   dispatch_async(dispatch_get_main_queue(), ^{
-    UIView *view = [self.viewRegistry_DEPRECATED viewForReactTag:@((NSInteger)reactTag)];
+    id registry = self.viewRegistry_DEPRECATED;
+    UIView *view = [registry respondsToSelector:@selector(viewForReactTag:)]
+      ? [registry performSelector:@selector(viewForReactTag:) withObject:@((NSInteger)reactTag)]
+      : nil;
     if (view == nil) {
       resolve(@{ @"found": @NO });
       return;
