@@ -16,7 +16,7 @@ interface Probe {
 }
 
 // A: cleanup by saved tag, B: no cleanup, C: no cleanup + prepareForRecycle swizzle
-const MODE: "A" | "B" | "C" = "A";
+const MODE: "A" | "B" | "C" = "C";
 
 const mod = NativeModules.ReactNativeAppIntents as {
   spikeTagView: (tag: number, value: string) => Promise<Probe>;
