@@ -2,6 +2,8 @@
 
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -170,6 +172,15 @@ static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
   }
 }
 
+static NSString *const ReactNativeAppIntentsCatalogKeyPrefix = @"ReactNativeAppIntentsEntityCatalog.";
+static NSString *const ReactNativeAppIntentsSyncedCatalogKeyPrefix = @"ReactNativeAppIntentsEntityCatalogSynced.";
+
+// Generated code defines the bridge class; a missing class means codegen was not rerun.
+static Class ReactNativeAppIntentsBridgeClass(void)
+{
+  return NSClassFromString(@"ReactNativeAppIntentsGeneratedBridge");
+}
+
 @interface ReactNativeAppIntents ()
 @property (nonatomic, assign) BOOL observing;
 @property (nonatomic, strong) id enqueueObserver;
@@ -179,11 +190,20 @@ static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
 
 RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
+@synthesize viewRegistry_DEPRECATED = _viewRegistry_DEPRECATED;
+
 - (instancetype)init
 {
   self = [super init];
 
   if (self) {
+    Class bridge = ReactNativeAppIntentsBridgeClass();
+    SEL startSelector = NSSelectorFromString(@"start");
+
+    if (bridge != nil && [bridge respondsToSelector:startSelector]) {
+      ((void (*)(id, SEL))objc_msgSend)(bridge, startSelector);
+    }
+
     ReactNativeAppIntentsCurrentModule = self;
     __weak ReactNativeAppIntents *weakSelf = self;
     // Swift posts this after writing a run, so a foreground run reaches JS without an AppState change.
@@ -373,6 +393,259 @@ RCT_REMAP_METHOD(
     [UIApplication sharedApplication].shortcutItems = items;
     resolve(nil);
   });
+}
+
+RCT_REMAP_METHOD(
+  setEntityCatalog,
+  setEntityCatalog:(NSString *)entityId
+  json:(NSString *)json
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  if (entityId.length == 0 || json == nil) {
+    reject(@"invalid_catalog", @"entityId and json are required", nil);
+    return;
+  }
+
+  NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+  id parsed = data != nil ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+
+  if (![parsed isKindOfClass:[NSArray class]]) {
+    reject(@"invalid_catalog", @"The catalog must be a JSON array", nil);
+    return;
+  }
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    [ReactNativeAppIntentsUserDefaults()
+      setObject:json
+         forKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId]];
+  }
+
+  NSString *syncedKey = [ReactNativeAppIntentsSyncedCatalogKeyPrefix stringByAppendingString:entityId];
+  void (^markSynced)(void) = ^{
+    @synchronized(ReactNativeAppIntentsLock()) {
+      [ReactNativeAppIntentsUserDefaults() setObject:json forKey:syncedKey];
+    }
+  };
+
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"catalogDidChange:completion:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    markSynced();
+    resolve(nil);
+    return;
+  }
+
+  void (^completion)(NSError *) = ^(NSError *_Nullable error) {
+    if (error != nil) {
+      reject(@"catalog_update_failed", error.localizedDescription, error);
+      return;
+    }
+
+    markSynced();
+    resolve(nil);
+  };
+
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    ((void (*)(id, SEL, NSString *, void (^)(NSError *)))objc_msgSend)(bridge, selector, entityId, completion);
+  });
+}
+
+RCT_REMAP_METHOD(
+  getEntityCatalog,
+  getEntityCatalog:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  NSString *json = nil;
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    id value = [ReactNativeAppIntentsUserDefaults()
+      objectForKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId ?: @""]];
+    json = [value isKindOfClass:[NSString class]] ? value : nil;
+  }
+
+  resolve(json);
+}
+
+RCT_REMAP_METHOD(
+  getSyncedEntityCatalog,
+  getSyncedEntityCatalog:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  NSString *json = nil;
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    id value = [ReactNativeAppIntentsUserDefaults()
+      objectForKey:[ReactNativeAppIntentsSyncedCatalogKeyPrefix stringByAppendingString:entityId ?: @""]];
+    json = [value isKindOfClass:[NSString class]] ? value : nil;
+  }
+
+  resolve(json);
+}
+
+RCT_REMAP_METHOD(
+  reindexEntities,
+  reindexEntities:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"reindex:completion:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  void (^completion)(NSError *) = ^(NSError *_Nullable error) {
+    if (error != nil) {
+      reject(@"reindex_failed", error.localizedDescription, error);
+      return;
+    }
+
+    resolve(nil);
+  };
+
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    ((void (*)(id, SEL, NSString *, void (^)(NSError *)))objc_msgSend)(bridge, selector, entityId, completion);
+  });
+}
+
+RCT_REMAP_METHOD(
+  setOnscreenEntity,
+  setOnscreenEntity:(NSString *)token
+  entityId:(NSString *)entityId
+  id:(NSString *)itemId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"setOnscreenEntity:entityId:id:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    ((void (*)(id, SEL, NSString *, NSString *, NSString *))objc_msgSend)(bridge, selector, token, entityId, itemId);
+    resolve(nil);
+  });
+}
+
+static const void *ReactNativeAppIntentsTagValueKey = &ReactNativeAppIntentsTagValueKey;
+static NSMapTable<NSNumber *, UIView *> *ReactNativeAppIntentsTaggedViews;
+static NSMutableDictionary<NSNumber *, NSString *> *ReactNativeAppIntentsTaggedValues;
+
+- (UIView *)viewForReactTag:(NSNumber *)reactTag
+{
+  id registry = self.viewRegistry_DEPRECATED;
+  SEL selector = NSSelectorFromString(@"viewForReactTag:");
+
+  if ([registry respondsToSelector:selector]) {
+    return ((UIView * (*)(id, SEL, NSNumber *)) objc_msgSend)(registry, selector, reactTag);
+  }
+
+  // Old architecture: the bridge's UIManager owns the registry.
+  SEL uiManagerSelector = NSSelectorFromString(@"uiManager");
+  id uiManager = [self.bridge respondsToSelector:uiManagerSelector]
+    ? ((id (*)(id, SEL))objc_msgSend)(self.bridge, uiManagerSelector)
+    : nil;
+
+  return [uiManager respondsToSelector:selector]
+    ? ((UIView * (*)(id, SEL, NSNumber *))objc_msgSend)(uiManager, selector, reactTag)
+    : nil;
+}
+
+RCT_REMAP_METHOD(
+  setEntityTag,
+  setEntityTag:(nonnull NSNumber *)reactTag
+  entityId:(NSString *)entityId
+  id:(NSString *)itemId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  Class bridge = ReactNativeAppIntentsBridgeClass();
+  SEL selector = NSSelectorFromString(@"setEntityIdentifierOn:entityId:id:");
+
+  if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    resolve(nil);
+    return;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (ReactNativeAppIntentsTaggedViews == nil) {
+      ReactNativeAppIntentsTaggedViews = [NSMapTable strongToWeakObjectsMapTable];
+      ReactNativeAppIntentsTaggedValues = [NSMutableDictionary new];
+    }
+
+    BOOL clear = entityId == nil || itemId == nil;
+    UIView *view = [self viewForReactTag:reactTag];
+    UIView *known = [ReactNativeAppIntentsTaggedViews objectForKey:reactTag];
+
+    if (clear) {
+      // Unmount: the registry may already have dropped the view, so fall back to the one we tagged.
+      view = view ?: known;
+      NSString *ours = ReactNativeAppIntentsTaggedValues[reactTag];
+      NSString *current = view ? objc_getAssociatedObject(view, ReactNativeAppIntentsTagValueKey) : nil;
+
+      // A recycled view may already carry another row's tag; leave it alone.
+      if (view != nil && ours != nil && [ours isEqualToString:current]) {
+        objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, nil, nil);
+      }
+
+      [ReactNativeAppIntentsTaggedViews removeObjectForKey:reactTag];
+      [ReactNativeAppIntentsTaggedValues removeObjectForKey:reactTag];
+      resolve(nil);
+      return;
+    }
+
+    // The value is unique per tag, so a recycled view carrying another tag's value is not ours.
+    NSString *value = [NSString stringWithFormat:@"%@|%@|%@", reactTag, entityId, itemId];
+
+    ReactNativeAppIntentsTaggedValues[reactTag] = value;
+    [self applyEntityTag:reactTag value:value entityId:entityId itemId:itemId bridge:bridge selector:selector attemptsLeft:20];
+    resolve(nil);
+  });
+}
+
+// The effect runs before Fabric has mounted the native view, so retry until it exists or the tag is cleared.
+- (void)applyEntityTag:(NSNumber *)reactTag
+                 value:(NSString *)value
+              entityId:(NSString *)entityId
+                itemId:(NSString *)itemId
+                bridge:(Class)bridge
+              selector:(SEL)selector
+          attemptsLeft:(NSInteger)attemptsLeft
+{
+  if (![ReactNativeAppIntentsTaggedValues[reactTag] isEqualToString:value]) {
+    return;
+  }
+
+  UIView *view = [self viewForReactTag:reactTag];
+
+  if (view == nil) {
+    if (attemptsLeft > 0) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        [self applyEntityTag:reactTag value:value entityId:entityId itemId:itemId bridge:bridge selector:selector attemptsLeft:attemptsLeft - 1];
+      });
+    }
+    return;
+  }
+
+  objc_setAssociatedObject(view, ReactNativeAppIntentsTagValueKey, value, OBJC_ASSOCIATION_COPY_NONATOMIC);
+  [ReactNativeAppIntentsTaggedViews setObject:view forKey:reactTag];
+  ((void (*)(id, SEL, UIView *, NSString *, NSString *))objc_msgSend)(bridge, selector, view, entityId, itemId);
 }
 
 + (void)recordIncomingURLString:(NSString *)url

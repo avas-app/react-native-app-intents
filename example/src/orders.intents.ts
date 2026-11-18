@@ -2,12 +2,14 @@ import { defineEntity, defineIntent, p } from "@avasapp/react-native-app-intents
 
 export const Order = defineEntity({
   id: "Order",
+  catalog: "runtime",
   inventory: [{ customer: "Taylor", id: 1, number: "1234" }],
   schema: p.object({
     id: p.int(),
     number: p.string(),
     customer: p.string(),
   }),
+  spotlight: { openIntent: "openSavedOrder" },
   title: "Order",
   identifier: (order) => String(order.id),
   displayRepresentation: (order) => ({

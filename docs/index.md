@@ -432,6 +432,96 @@ async function logout() {
 This keeps Siri/App Shortcuts suggestions aligned with the current account state
 instead of exposing stale shortcuts after logout.
 
+## Runtime entity catalogs
+
+An entity with `catalog: "runtime"` takes its values from JavaScript at run time
+instead of the values baked in at codegen.
+
+```ts
+export const order = defineEntity({
+  id: "order",
+  title: "Order",
+  catalog: "runtime",
+  schema: p.object({ orderNumber: p.string() }),
+  identifier: (order) => order.orderNumber,
+  displayRepresentation: (order) => ({ title: `Order ${order.orderNumber}` }),
+});
+
+await appIntents.setEntities(order, [
+  {
+    id: "4521",
+    title: "Order 4521",
+    subtitle: "Arrives Tue",
+    synonyms: ["last order"],
+    value: { orderNumber: "4521" },
+  },
+]);
+
+const orders = await appIntents.getEntities(order);
+```
+
+`setEntities` checks that every entry has a non-empty `id` and `title` and a unique
+`id`; a bad entry rejects and leaves the stored catalog unchanged. Publishing a
+catalog equal to the current one is a no-op, so calling `setEntities` on every
+launch is safe. Static `inventory` seeds Siri and Shortcuts, but a Spotlight entity
+is not indexed until the first `setEntities` or `reindexEntities`.
+The catalog is stored natively in `UserDefaults`, so keep it to the rows Siri
+needs. Clear it on logout with `setEntities(order, [])`.
+
+## Spotlight
+
+Index an entity in Spotlight (iOS 18+) so it appears in search and Apple
+Intelligence. Tapping a result runs its open intent.
+
+```ts
+export const order = defineEntity({
+  id: "order",
+  title: "Order",
+  catalog: "runtime",
+  schema: p.object({ orderNumber: p.string() }),
+  identifier: (order) => order.orderNumber,
+  displayRepresentation: (order) => ({ title: `Order ${order.orderNumber}` }),
+  spotlight: { openIntent: "openOrder" },
+});
+```
+
+`spotlight.openIntent` is the id of an intent that takes exactly one required
+parameter of this entity. Spotlight requires `catalog: "runtime"`. An entry with
+`hideInSpotlight: true` stays resolvable but is not indexed. Indexing follows the
+published catalog: added and changed entries are indexed, removed entries are
+deleted. `reindexEntities(entity)` forces a full rebuild of the index for one entity,
+or for every spotlight entity when called with no argument, for example after a
+failed sync. A system-evicted index is rebuilt automatically.
+
+## Onscreen entity
+
+Tell Siri and Apple Intelligence which entity the screen is showing (iOS 18.2+),
+so requests like "send this" or "summarize this" resolve.
+
+```ts
+useOnscreenEntity(order, selectedOrder?.id);
+```
+
+Pass the entity and the id on screen; pass `null` or `undefined` to clear it.
+
+### Tag a view
+
+Tag a single view, such as a list row, with the entity it shows (iOS 18.4+).
+
+```tsx
+const ref = useRef<View>(null);
+useAppEntityTag(ref, order, row.id);
+
+<View ref={ref} collapsable={false}>
+  …
+</View>;
+```
+
+The view needs `collapsable={false}` so it exists as a native view. The tag is cleared on unmount or when the id changes. It does nothing on Android and older iOS.
+
+`setEntities`, `getEntities`, `reindexEntities`, `useOnscreenEntity`, `useAppEntityTag` and Spotlight
+are iOS-only. On Android they resolve and do nothing.
+
 ## Android App Actions contract
 
 - Use `android.appAction` to opt an intent into Android App Actions.
