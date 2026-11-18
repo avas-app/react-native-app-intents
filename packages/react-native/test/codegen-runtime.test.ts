@@ -183,6 +183,10 @@ test("runtime + spotlight entities generate store-backed queries, IndexedEntity 
   );
   assert.match(
     swift,
+    /Task\(priority: \.utility\) \{\n        try\? await ReactNativeAppIntentsGeneratedBridge\.syncCatalog\(entityId: nil, rebuild: false\)/,
+  );
+  assert.match(
+    swift,
     /@objc static func setOnscreenEntity\(_ token: String, entityId: String\?, id: String\?\)/,
   );
   assert.match(swift, /onscreenOwners\.removeAll \{ \$0\.token == token \}/);

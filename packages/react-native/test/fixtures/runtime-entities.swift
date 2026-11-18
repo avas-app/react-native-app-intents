@@ -659,6 +659,10 @@ final class ReactNativeAppIntentsGeneratedBridge: NSObject {
   @objc static func start() {
     if #available(iOS 18.0, *) {
       ReactNativeAppIntentsIndexDelegate.install()
+      // Once per launch, so an index that lost entries (e.g. after a reinstall) is repaired.
+      Task(priority: .utility) {
+        try? await ReactNativeAppIntentsGeneratedBridge.syncCatalog(entityId: nil, rebuild: false)
+      }
     }
   }
 
