@@ -1,7 +1,7 @@
 // SPIKE (throwaway): entity tag lookup trial.
 import type { ReactElement, RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FlatList, findNodeHandle, NativeModules, Text, View } from "react-native";
+import { findNodeHandle, NativeModules, Text, View } from "react-native";
 
 interface Probe {
   found: boolean;
@@ -77,12 +77,17 @@ function Row(props: { index: number; clear: boolean }): ReactElement {
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+const seenPtr = new Map<string, string>();
 async function audit(label: string): Promise<void> {
+  const currentPtr = new Set<string>();
   let stale = 0;
   let total = 0;
+  let recycled = 0;
   for (const [index, ref] of rowRefs) {
     const p = await probe(ref, "");
     total++;
+    if (p.ptr && seenPtr.has(p.ptr) && seenPtr.get(p.ptr) !== `${label}:${index}` && !currentPtr.has(p.ptr)) recycled++;
+    if (p.ptr) currentPtr.add(p.ptr);
     const expected = index % 3 !== 0 ? `row-${index}` : null;
     const got = p.accessibilityIdentifier ?? null;
     if (got !== expected) {
@@ -90,7 +95,8 @@ async function audit(label: string): Promise<void> {
       log(`${label} MISMATCH row ${index}: expected ${expected} got ${got} (${p.class} ${p.ptr})`);
     }
   }
-  log(`${label}: ${total} mounted rows, ${stale} mismatches`);
+  for (const ptr of currentPtr) seenPtr.set(ptr, label);
+  log(`${label}: ${total} mounted rows, ${stale} mismatches, ${recycled} on a view used before`);
 }
 
 export default function SpikeScreen(): ReactElement {
@@ -99,7 +105,8 @@ export default function SpikeScreen(): ReactElement {
   const [show, setShow] = useState(true);
   const [clear, setClear] = useState(false);
   const [listKey, setListKey] = useState(0);
-  const list = useRef<FlatList>(null);
+  const [start, setStart] = useState(0);
+  const scrollTo = (y: number): void => setStart(Math.round(y / 60));
   render = () => setTick((t) => t + 1);
 
   useEffect(() => {
@@ -110,8 +117,8 @@ export default function SpikeScreen(): ReactElement {
       await wait(1500);
       log("== PHASE 1: scroll with NO cleanup (expect stale ids on untagged rows)");
       await audit("phase1 initial");
-      for (const y of [1500, 3000, 4500, 800]) {
-        list.current?.scrollToOffset({ offset: y, animated: false });
+      for (const y of [480, 1200, 3000, 60]) {
+        scrollTo(y);
         await wait(1200);
         await audit(`phase1 offset ${y}`);
       }
@@ -119,8 +126,8 @@ export default function SpikeScreen(): ReactElement {
       setClear(true);
       setListKey(1);
       await wait(1500);
-      for (const y of [1500, 3000, 4500, 800]) {
-        list.current?.scrollToOffset({ offset: y, animated: false });
+      for (const y of [480, 1200, 3000, 60]) {
+        scrollTo(y);
         await wait(1200);
         await audit(`phase2 offset ${y}`);
       }
@@ -139,9 +146,11 @@ export default function SpikeScreen(): ReactElement {
           <Tagged name="flat" flatten value="flat-1" bump={bump} />
         </>
       ) : null}
-      <FlatList ref={list} key={listKey} style={{ height: 200 }} data={Array.from({ length: 80 }, (_, i) => i)}
-        keyExtractor={(i) => String(i)} windowSize={3} initialNumToRender={6} maxToRenderPerBatch={4}
-        renderItem={({ item }) => <Row index={item} clear={clear} />} />
+      <View key={listKey} style={{ height: 240, overflow: "hidden" }}>
+        {Array.from({ length: 8 }, (_, i) => start + i).map((i) => (
+          <Row key={i} index={i} clear={clear} />
+        ))}
+      </View>
       <Text style={{ fontSize: 9 }}>{lines.slice(-14).join("\n")}</Text>
     </View>
   );
