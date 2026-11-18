@@ -64,11 +64,36 @@ private struct ReactNativeAppIntentsCatalogEntry {
   let fingerprint: String
 }
 
+private final class ReactNativeAppIntentsCatalogCache: @unchecked Sendable {
+  static let shared = ReactNativeAppIntentsCatalogCache()
+
+  private let lock = NSLock()
+  private var cache: [String: (json: String, entries: [ReactNativeAppIntentsCatalogEntry]?)] = [:]
+
+  func entries(forKey key: String, json: String) -> [ReactNativeAppIntentsCatalogEntry]? {
+    lock.lock()
+    defer { lock.unlock() }
+
+    if let cached = cache[key], cached.json == json {
+      return cached.entries
+    }
+
+    let entries = reactNativeAppIntentsParseCatalog(json)
+    cache[key] = (json, entries)
+    return entries
+  }
+}
+
 private func reactNativeAppIntentsCatalogEntries(forKey key: String) -> [ReactNativeAppIntentsCatalogEntry]? {
-  guard
-    let json = reactNativeAppIntentsUserDefaults().string(forKey: key),
-    let items = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
-  else {
+  guard let json = reactNativeAppIntentsUserDefaults().string(forKey: key) else {
+    return nil
+  }
+
+  return ReactNativeAppIntentsCatalogCache.shared.entries(forKey: key, json: json)
+}
+
+private func reactNativeAppIntentsParseCatalog(_ json: String) -> [ReactNativeAppIntentsCatalogEntry]? {
+  guard let items = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]] else {
     return nil
   }
 
@@ -195,7 +220,11 @@ private enum OrderEntityCatalog {
   }
 
   static func record(for id: String) -> OrderEntityRecord? {
-    records.first { $0.id == id }
+    guard let entries = reactNativeAppIntentsCatalogEntries(forKey: storeKey) else {
+      return seedRecords.first { $0.id == id }
+    }
+
+    return entries.first { $0.id == id }.map { OrderEntityRecord(entry: $0) }
   }
 
   static func displayRepresentation(for id: String) -> DisplayRepresentation {
@@ -418,6 +447,27 @@ private final class ReactNativeAppIntentsIndexDelegate: NSObject, CSSearchableIn
   }
 }
 
+private actor ReactNativeAppIntentsSyncGate {
+  private var busy = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func acquire() async {
+    if busy {
+      await withCheckedContinuation { waiters.append($0) }
+    } else {
+      busy = true
+    }
+  }
+
+  func release() {
+    if waiters.isEmpty {
+      busy = false
+    } else {
+      waiters.removeFirst().resume()
+    }
+  }
+}
+
 @available(iOS 16.0, *)
 private func reactNativeAppIntentsEntityIdentifier(_ entityId: String, _ id: String) -> EntityIdentifier? {
   switch entityId {
@@ -452,7 +502,22 @@ final class ReactNativeAppIntentsGeneratedBridge: NSObject {
     }
   }
 
+  private static let syncGate = ReactNativeAppIntentsSyncGate()
+  nonisolated(unsafe) private static var onscreenOwners: [(token: String, entityId: String, id: String)] = []
+
   fileprivate static func syncCatalog(entityId: String?, rebuild: Bool) async throws {
+    await syncGate.acquire()
+
+    do {
+      try await syncCatalogUnlocked(entityId: entityId, rebuild: rebuild)
+      await syncGate.release()
+    } catch {
+      await syncGate.release()
+      throw error
+    }
+  }
+
+  private static func syncCatalogUnlocked(entityId: String?, rebuild: Bool) async throws {
     if #available(iOS 18.0, *) {
       ReactNativeAppIntentsIndexDelegate.install()
 
@@ -477,8 +542,14 @@ final class ReactNativeAppIntentsGeneratedBridge: NSObject {
     }
   }
 
-  @objc static func setOnscreenEntity(_ entityId: String?, id: String?) {
+  @objc static func setOnscreenEntity(_ token: String, entityId: String?, id: String?) {
     DispatchQueue.main.async {
+      onscreenOwners.removeAll { $0.token == token }
+
+      if let entityId, let id {
+        onscreenOwners.append((token: token, entityId: entityId, id: id))
+      }
+
       guard #available(iOS 18.2, *) else {
         return
       }
@@ -493,7 +564,7 @@ final class ReactNativeAppIntentsGeneratedBridge: NSObject {
         return
       }
 
-      if let entityId, let id, let identifier = reactNativeAppIntentsEntityIdentifier(entityId, id) {
+      if let owner = onscreenOwners.last, let identifier = reactNativeAppIntentsEntityIdentifier(owner.entityId, owner.id) {
         let activity = NSUserActivity(activityType: "ReactNativeAppIntents.onscreenEntity")
         activity.appEntityIdentifier = identifier
         root.userActivity = activity

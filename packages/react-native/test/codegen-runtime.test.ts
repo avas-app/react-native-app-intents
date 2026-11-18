@@ -176,7 +176,16 @@ test("runtime + spotlight entities generate store-backed queries, IndexedEntity 
     swift,
     /@objc static func start\(\) \{\n    if #available\(iOS 18\.0, \*\) \{\n      ReactNativeAppIntentsIndexDelegate\.install\(\)/,
   );
-  assert.match(swift, /@objc static func setOnscreenEntity\(_ entityId: String\?, id: String\?\)/);
+  assert.match(
+    swift,
+    /@objc static func setOnscreenEntity\(_ token: String, entityId: String\?, id: String\?\)/,
+  );
+  assert.match(swift, /onscreenOwners\.removeAll \{ \$0\.token == token \}/);
+  assert.match(swift, /if let owner = onscreenOwners\.last/);
+  assert.match(swift, /actor ReactNativeAppIntentsSyncGate/);
+  assert.match(swift, /fileprivate static func syncCatalog[\s\S]*?await syncGate\.acquire\(\)/);
+  assert.match(swift, /final class ReactNativeAppIntentsCatalogCache/);
+  assert.match(swift, /cached\.json == json/);
   assert.match(
     swift,
     /@objc static func setEntityIdentifier\(on view: UIView, entityId: String\?, id: String\?\)/,

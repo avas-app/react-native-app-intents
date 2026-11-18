@@ -173,6 +173,7 @@ static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
 }
 
 static NSString *const ReactNativeAppIntentsCatalogKeyPrefix = @"ReactNativeAppIntentsEntityCatalog.";
+static NSString *const ReactNativeAppIntentsSyncedCatalogKeyPrefix = @"ReactNativeAppIntentsEntityCatalogSynced.";
 
 // Generated code defines the bridge class; a missing class means codegen was not rerun.
 static Class ReactNativeAppIntentsBridgeClass(void)
@@ -421,10 +422,18 @@ RCT_REMAP_METHOD(
          forKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId]];
   }
 
+  NSString *syncedKey = [ReactNativeAppIntentsSyncedCatalogKeyPrefix stringByAppendingString:entityId];
+  void (^markSynced)(void) = ^{
+    @synchronized(ReactNativeAppIntentsLock()) {
+      [ReactNativeAppIntentsUserDefaults() setObject:json forKey:syncedKey];
+    }
+  };
+
   Class bridge = ReactNativeAppIntentsBridgeClass();
   SEL selector = NSSelectorFromString(@"catalogDidChange:completion:");
 
   if (bridge == nil || ![bridge respondsToSelector:selector]) {
+    markSynced();
     resolve(nil);
     return;
   }
@@ -435,6 +444,7 @@ RCT_REMAP_METHOD(
       return;
     }
 
+    markSynced();
     resolve(nil);
   };
 
@@ -455,6 +465,24 @@ RCT_REMAP_METHOD(
   @synchronized(ReactNativeAppIntentsLock()) {
     id value = [ReactNativeAppIntentsUserDefaults()
       objectForKey:[ReactNativeAppIntentsCatalogKeyPrefix stringByAppendingString:entityId ?: @""]];
+    json = [value isKindOfClass:[NSString class]] ? value : nil;
+  }
+
+  resolve(json);
+}
+
+RCT_REMAP_METHOD(
+  getSyncedEntityCatalog,
+  getSyncedEntityCatalog:(NSString *)entityId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  NSString *json = nil;
+
+  @synchronized(ReactNativeAppIntentsLock()) {
+    id value = [ReactNativeAppIntentsUserDefaults()
+      objectForKey:[ReactNativeAppIntentsSyncedCatalogKeyPrefix stringByAppendingString:entityId ?: @""]];
     json = [value isKindOfClass:[NSString class]] ? value : nil;
   }
 
@@ -492,14 +520,15 @@ RCT_REMAP_METHOD(
 
 RCT_REMAP_METHOD(
   setOnscreenEntity,
-  setOnscreenEntity:(NSString *)entityId
+  setOnscreenEntity:(NSString *)token
+  entityId:(NSString *)entityId
   id:(NSString *)itemId
   resolver:(RCTPromiseResolveBlock)resolve
   rejecter:(RCTPromiseRejectBlock)reject
 )
 {
   Class bridge = ReactNativeAppIntentsBridgeClass();
-  SEL selector = NSSelectorFromString(@"setOnscreenEntity:id:");
+  SEL selector = NSSelectorFromString(@"setOnscreenEntity:entityId:id:");
 
   if (bridge == nil || ![bridge respondsToSelector:selector]) {
     resolve(nil);
@@ -507,7 +536,7 @@ RCT_REMAP_METHOD(
   }
 
   dispatch_async(dispatch_get_main_queue(), ^{
-    ((void (*)(id, SEL, NSString *, NSString *))objc_msgSend)(bridge, selector, entityId, itemId);
+    ((void (*)(id, SEL, NSString *, NSString *, NSString *))objc_msgSend)(bridge, selector, token, entityId, itemId);
     resolve(nil);
   });
 }
