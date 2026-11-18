@@ -282,10 +282,9 @@ extension OrderEntityCatalog {
       try await index.deleteAppEntities(identifiedBy: Array(removed), ofType: OrderAppEntity.self)
     }
 
-    let changed = visible.filter { previous[$0.id] != $0.fingerprint }
-
-    if !changed.isEmpty {
-      try await index.indexAppEntities(changed.map { OrderAppEntity(id: $0.id) }, priority: 0)
+    // Re-index everything visible: the stored record can outlive the index (e.g. app group data after a reinstall).
+    if !visible.isEmpty {
+      try await index.indexAppEntities(visible.map { OrderAppEntity(id: $0.id) }, priority: 0)
     }
 
     defaults.set(current, forKey: indexedKey)

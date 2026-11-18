@@ -166,6 +166,11 @@ test("runtime + spotlight entities generate store-backed queries, IndexedEntity 
   assert.match(swift, /var target: OrderAppEntity/);
   assert.match(
     swift,
+    /if !visible\.isEmpty \{\n      try await index\.indexAppEntities\(visible\.map \{ OrderAppEntity\(id: \$0\.id\) \}, priority: 0\)/,
+  );
+  assert.doesNotMatch(swift, /let changed = visible/);
+  assert.match(
+    swift,
     /@objc static func catalogDidChange\(_ entityId: String, completion: @escaping \(NSError\?\) -> Void\)/,
   );
   assert.match(
