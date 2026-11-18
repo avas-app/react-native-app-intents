@@ -2,6 +2,7 @@
 
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -235,6 +236,32 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 }
 
 // SPIKE (throwaway): look up the UIView behind a React tag and set/read a harmless property.
+static NSMapTable<NSNumber *, UIView *> *SpikeViews;
+static NSMutableDictionary<NSNumber *, NSString *> *SpikeValues;
+static IMP SpikeOriginalPrepare;
+
+RCT_REMAP_METHOD(
+  spikeSwizzle,
+  spikeSwizzle:(BOOL)on
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    Class cls = NSClassFromString(@"RCTViewComponentView");
+    Method m = class_getInstanceMethod(cls, @selector(prepareForRecycle));
+    if (on && SpikeOriginalPrepare == NULL) {
+      SpikeOriginalPrepare = method_getImplementation(m);
+      IMP orig = SpikeOriginalPrepare;
+      method_setImplementation(m, imp_implementationWithBlock(^(UIView *self_) {
+        ((void (*)(id, SEL))orig)(self_, @selector(prepareForRecycle));
+        self_.accessibilityIdentifier = nil;
+      }));
+    }
+    resolve(@(SpikeOriginalPrepare != NULL));
+  });
+}
+
 RCT_REMAP_METHOD(
   spikeTagView,
   spikeTagView:(double)reactTag
@@ -244,21 +271,42 @@ RCT_REMAP_METHOD(
 )
 {
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (SpikeViews == nil) {
+      SpikeViews = [NSMapTable strongToWeakObjectsMapTable];
+      SpikeValues = [NSMutableDictionary new];
+    }
+    NSNumber *key = @((NSInteger)reactTag);
     id registry = self.viewRegistry_DEPRECATED;
     UIView *view = [registry respondsToSelector:@selector(viewForReactTag:)]
-      ? [registry performSelector:@selector(viewForReactTag:) withObject:@((NSInteger)reactTag)]
+      ? [registry performSelector:@selector(viewForReactTag:) withObject:key]
       : nil;
+    NSString *via = @"registry";
+    BOOL clear = [value isEqualToString:@"__CLEAR__"];
+    if (view == nil && clear) {
+      view = [SpikeViews objectForKey:key];
+      via = @"weakmap";
+      NSString *mine = SpikeValues[key];
+      if (view != nil && ![view.accessibilityIdentifier isEqualToString:mine]) {
+        resolve(@{ @"found": @NO, @"note": [NSString stringWithFormat:@"weakmap view reused (now %@)", view.accessibilityIdentifier ?: @"nil"] });
+        return;
+      }
+    }
     if (view == nil) {
       resolve(@{ @"found": @NO });
       return;
     }
-    if ([value isEqualToString:@"__CLEAR__"]) {
+    if (clear) {
       view.accessibilityIdentifier = nil;
+      [SpikeViews removeObjectForKey:key];
+      [SpikeValues removeObjectForKey:key];
     } else if (value.length > 0) {
       view.accessibilityIdentifier = value;
+      [SpikeViews setObject:view forKey:key];
+      SpikeValues[key] = value;
     }
     resolve(@{
       @"found": @YES,
+      @"via": via,
       @"class": NSStringFromClass([view class]),
       @"ptr": [NSString stringWithFormat:@"%p", view],
       @"accessibilityIdentifier": view.accessibilityIdentifier ?: [NSNull null],

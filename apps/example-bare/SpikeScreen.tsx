@@ -11,10 +11,16 @@ interface Probe {
   nativeID?: string | null;
   hasAppEntityIdentifier?: boolean;
   inWindow?: boolean;
+  via?: string;
+  note?: string;
 }
+
+// A: cleanup by saved tag, B: no cleanup, C: no cleanup + prepareForRecycle swizzle
+const MODE: "A" | "B" | "C" = "A";
 
 const mod = NativeModules.ReactNativeAppIntents as {
   spikeTagView: (tag: number, value: string) => Promise<Probe>;
+  spikeSwizzle: (on: boolean) => Promise<boolean>;
 };
 
 const lines: string[] = [];
@@ -27,28 +33,32 @@ function log(msg: string): void {
 
 async function probe(ref: RefObject<View | null>, value: string): Promise<Probe> {
   const tag = findNodeHandle(ref.current);
-  if (tag == null) return { found: false };
+  if (tag == null) return { found: false, note: "ref null" };
   return mod.spikeTagView(tag, value);
 }
 
 const fmt = (p: Probe): string =>
   p.found
-    ? `${p.class} ptr=${p.ptr} axId=${p.accessibilityIdentifier} nativeID=${p.nativeID} inWindow=${p.inWindow} appEntityId=${p.hasAppEntityIdentifier}`
-    : "NOT FOUND";
+    ? `${p.class} via=${p.via} ptr=${p.ptr} axId=${p.accessibilityIdentifier} nativeID=${p.nativeID} inWindow=${p.inWindow} appEntityId=${p.hasAppEntityIdentifier}`
+    : `NOT FOUND ${p.note ?? ""}`;
 
-function Tagged(props: { name: string; flatten?: boolean; value: string; bump: number }): ReactElement {
+function Tagged(props: { name: string; flatten?: boolean; nid?: boolean; value: string; bump: number }): ReactElement {
   const ref = useRef<View>(null);
+  const tagRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     void probe(ref, props.value).then((p) => log(`${props.name} layoutEffect: ${fmt(p)}`));
   }, []);
   useEffect(() => {
+    tagRef.current = findNodeHandle(ref.current);
     void probe(ref, props.value).then((p) => log(`${props.name} effect(bump=${props.bump}): ${fmt(p)}`));
     return () => {
-      void probe(ref, "__CLEAR__").then((p) => log(`${props.name} cleanup: ${fmt(p)}`));
+      const tag = tagRef.current;
+      log(`${props.name} cleanup: ref.current=${ref.current == null ? "null" : "set"} tag=${tag}`);
+      if (tag != null) void mod.spikeTagView(tag, "__CLEAR__").then((p) => log(`${props.name} cleanup by tag: ${fmt(p)}`));
     };
   }, [props.bump]);
   return (
-    <View ref={ref} collapsable={props.flatten ? undefined : false} nativeID={`nid-${props.name}`}
+    <View ref={ref} collapsable={props.flatten ? undefined : false} nativeID={props.nid === false ? undefined : `nid-${props.name}`}
       style={props.flatten ? { margin: 2 } : { height: 20, backgroundColor: "#cde" }}>
       {props.flatten ? <Text>flatten candidate</Text> : null}
     </View>
@@ -62,10 +72,11 @@ function Row(props: { index: number; clear: boolean }): ReactElement {
   const tagged = props.index % 3 !== 0;
   useEffect(() => {
     rowRefs.set(props.index, ref);
+    const tag = findNodeHandle(ref.current);
     if (tagged) void probe(ref, `row-${props.index}`);
     return () => {
       rowRefs.delete(props.index);
-      if (tagged && props.clear) void probe(ref, "__CLEAR__");
+      if (tagged && props.clear && tag != null) void mod.spikeTagView(tag, "__CLEAR__");
     };
   }, [props.index, tagged, props.clear]);
   return (
@@ -103,7 +114,7 @@ export default function SpikeScreen(): ReactElement {
   const [, setTick] = useState(0);
   const [bump, setBump] = useState(0);
   const [show, setShow] = useState(true);
-  const [clear, setClear] = useState(false);
+  const clear = MODE === "A";
   const [listKey, setListKey] = useState(0);
   const [start, setStart] = useState(0);
   const scrollTo = (y: number): void => setStart(Math.round(y / 60));
@@ -115,21 +126,15 @@ export default function SpikeScreen(): ReactElement {
       log("== rerender");
       setBump(1);
       await wait(1500);
-      log("== PHASE 1: scroll with NO cleanup (expect stale ids on untagged rows)");
-      await audit("phase1 initial");
-      for (const y of [480, 1200, 3000, 60]) {
-        scrollTo(y);
-        await wait(1200);
-        await audit(`phase1 offset ${y}`);
-      }
-      log("== PHASE 2: remount list WITH cleanup on unmount");
-      setClear(true);
+      log(`== MODE ${MODE}`);
+      if (MODE === "C") log(`swizzle installed: ${await mod.spikeSwizzle(true)}`);
       setListKey(1);
       await wait(1500);
-      for (const y of [480, 1200, 3000, 60]) {
+      await audit("initial");
+      for (const y of [480, 1200, 3000, 60, 1200, 3000, 480]) {
         scrollTo(y);
         await wait(1200);
-        await audit(`phase2 offset ${y}`);
+        await audit(`offset ${y}`);
       }
       log("== unmount standalone views");
       setShow(false);
@@ -144,6 +149,7 @@ export default function SpikeScreen(): ReactElement {
         <>
           <Tagged name="solid" value="solid-1" bump={bump} />
           <Tagged name="flat" flatten value="flat-1" bump={bump} />
+          <Tagged name="flatNoNid" flatten nid={false} value="flat-2" bump={bump} />
         </>
       ) : null}
       <View key={listKey} style={{ height: 240, overflow: "hidden" }}>
