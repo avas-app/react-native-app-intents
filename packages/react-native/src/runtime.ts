@@ -115,6 +115,7 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       ): { remove(): void };
     };
     Linking: LinkingAdapter;
+    Platform?: { OS?: string };
     NativeModules: {
       ReactNativeAppIntents?: AppIntentsNativeModule;
     };
@@ -124,6 +125,8 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
   const nativeEmitter = nativeModule ? new reactNative.NativeEventEmitter(nativeModule) : null;
   // With a pending list, native is the single source for app-intents runs; Linking carries a copy without the id.
   const nativeOwnsIntents = Boolean(nativeModule?.getPendingIntentURLs);
+  // iOS openURL links never reach the native queue, so there Linking is their only copy.
+  const dropLinkingIntentUrls = nativeOwnsIntents && reactNative.Platform?.OS === "android";
   const isIntentHostUrl = (url: string | null | undefined): boolean =>
     typeof url === "string" && /^[^:/?#]+:\/\/app-intents(?:[/?#]|$)/.test(url);
 
@@ -176,7 +179,7 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       );
       subscriptions.push(
         reactNative.Linking.addEventListener("url", (event) => {
-          if (nativeOwnsIntents && isIntentHostUrl(event.url)) {
+          if (dropLinkingIntentUrls && isIntentHostUrl(event.url)) {
             return;
           }
 
@@ -195,7 +198,7 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       if (nativeOwnsIntents) {
         const linkingUrl = await reactNative.Linking.getInitialURL();
 
-        return isIntentHostUrl(linkingUrl) ? null : linkingUrl;
+        return dropLinkingIntentUrls && isIntentHostUrl(linkingUrl) ? null : linkingUrl;
       }
 
       if (nativeModule?.getInitialIntentURL) {

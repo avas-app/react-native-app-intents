@@ -10,6 +10,7 @@ const rn = {
   linkingListeners: [] as UrlListener[],
   nativeListeners: [] as UrlListener[],
   linkingInitialUrl: null as string | null,
+  os: "android",
   native: null as unknown,
 };
 
@@ -34,6 +35,11 @@ mock.module("react-native", () => ({
       rn.nativeListeners.push(listener);
       return { remove() {} };
     }
+  },
+  Platform: {
+    get OS() {
+      return rn.os;
+    },
   },
   NativeModules: {
     get ReactNativeAppIntents() {
@@ -84,6 +90,7 @@ beforeEach(() => {
   rn.linkingListeners.length = 0;
   rn.nativeListeners.length = 0;
   rn.linkingInitialUrl = null;
+  rn.os = "android";
 });
 
 test("default linking: listener is attached before the native read, so a run enqueued during it is not lost", async () => {
@@ -201,4 +208,21 @@ test("old native module: every queued run is read, not just the first", async ()
   await settle();
 
   assert.equal(calls, 3);
+});
+
+test("default linking: on iOS an app-intents link opened by URL still arrives through Linking", async () => {
+  rn.os = "ios";
+  rn.native = createNative();
+  rn.linkingInitialUrl = base;
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  const urls: string[] = [];
+  runtime.onAnyIntent((event) => {
+    urls.push(event.url);
+  });
+
+  assert.equal((await runtime.getInitialIntent())?.url, base);
+  rn.linkingListeners.forEach((listener) => listener({ url: `${base}&warm=1` }));
+  await settle();
+
+  assert.deepEqual(urls, [`${base}&warm=1`]);
 });
