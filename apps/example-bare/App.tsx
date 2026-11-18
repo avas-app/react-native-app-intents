@@ -258,6 +258,21 @@ function AppContent(): ReactElement {
             }}
             title="Clear on-screen order"
           />
+          <Button
+            onPress={() => {
+              void exampleRuntime.setEntities(
+                Order,
+                SAMPLE_ORDERS.filter((order) => order.id !== "4523"),
+              );
+            }}
+            title="Remove Order 4523"
+          />
+          <Button
+            onPress={() => {
+              void exampleRuntime.setEntities(Order, SAMPLE_ORDERS);
+            }}
+            title="Restore Order 4523"
+          />
         </View>
       </View>
 
