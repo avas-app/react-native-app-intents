@@ -2,6 +2,7 @@
 
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
+#import <React/RCTViewRegistry.h>
 
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
@@ -179,6 +180,8 @@ static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
 
 RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
+@synthesize viewRegistry_DEPRECATED = _viewRegistry_DEPRECATED;
+
 - (instancetype)init
 {
   self = [super init];
@@ -230,6 +233,38 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 - (void)stopObserving
 {
   self.observing = NO;
+}
+
+// SPIKE (throwaway): look up the UIView behind a React tag and set/read a harmless property.
+RCT_REMAP_METHOD(
+  spikeTagView,
+  spikeTagView:(double)reactTag
+  value:(NSString *)value
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIView *view = [self.viewRegistry_DEPRECATED viewForReactTag:@((NSInteger)reactTag)];
+    if (view == nil) {
+      resolve(@{ @"found": @NO });
+      return;
+    }
+    if ([value isEqualToString:@"__CLEAR__"]) {
+      view.accessibilityIdentifier = nil;
+    } else if (value.length > 0) {
+      view.accessibilityIdentifier = value;
+    }
+    resolve(@{
+      @"found": @YES,
+      @"class": NSStringFromClass([view class]),
+      @"ptr": [NSString stringWithFormat:@"%p", view],
+      @"accessibilityIdentifier": view.accessibilityIdentifier ?: [NSNull null],
+      @"nativeID": [view respondsToSelector:@selector(nativeId)] ? ([view valueForKey:@"nativeId"] ?: [NSNull null]) : [NSNull null],
+      @"hasAppEntityIdentifier": @([view respondsToSelector:NSSelectorFromString(@"setAppEntityIdentifier:")]),
+      @"inWindow": @(view.window != nil),
+    });
+  });
 }
 
 RCT_REMAP_METHOD(
