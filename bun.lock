@@ -70,7 +70,7 @@
     },
     "packages/react-native": {
       "name": "@avasapp/react-native-app-intents",
-      "version": "0.2.5",
+      "version": "0.2.7",
       "bin": {
         "app-intents": "dist/cli/cli.js",
       },

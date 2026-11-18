@@ -6,6 +6,7 @@ import os
 
 let dbgLog = Logger(subsystem: "dbg.spot", category: "sync")
 
+@available(iOS 18.0, *)
 func dbgListIndex(_ tag: String) {
   let q = CSSearchQuery(queryString: "displayName == \"*\"wc", queryContext: nil)
   var found: [String] = []
@@ -303,7 +304,7 @@ extension OrderEntityCatalog {
     dbgLog.notice("DBG sync done removed=\(removed.joined(separator: ","), privacy: .public) changed=\(changed.map { $0.id }.joined(separator: ","), privacy: .public)")
     defaults.set(current, forKey: indexedKey)
     try? await Task.sleep(nanoseconds: 3_000_000_000)
-    dbgListIndex("after-sync")
+    if #available(iOS 18.0, *) { dbgListIndex("after-sync") }
   }
 }
 
