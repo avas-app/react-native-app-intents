@@ -28,6 +28,8 @@ export interface AppIntentsNativeModule {
     payload: string,
     capabilityBindings?: readonly NativeShortcutCapabilityBinding[],
   ): Promise<void>;
+  acknowledgeIntent?(invocationId: string): Promise<void>;
   getInitialIntentURL?(): Promise<string | null>;
+  getPendingIntentURLs?(): Promise<string[]>;
   updateDynamicShortcuts(shortcuts: readonly NativeShortcutPayload[]): Promise<void>;
 }

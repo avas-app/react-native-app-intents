@@ -175,6 +175,10 @@ appIntents.onIntent(openOrder, (params) => {
 });
 ```
 
+Each run is kept by the native side until your handlers finish (or throw), then
+acknowledged. If the app is killed first, the run is delivered again on the next
+launch, so handlers should be safe to run twice.
+
 ## Auth-gated apps
 
 For apps where shortcuts should only exist for signed-in users or enabled

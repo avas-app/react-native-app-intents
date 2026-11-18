@@ -464,3 +464,182 @@ test("runtime serializes and parses nested object params", () => {
     url,
   });
 });
+
+const pingIntent = defineIntent({ id: "ping", title: "Ping", params: {} });
+
+function withInvocation(url: string, invocationId: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}invocationId=${invocationId}`;
+}
+
+function createFakeNative() {
+  const stored: string[] = [];
+  const acked: string[] = [];
+  const idOf = (url: string) =>
+    new URL(url.replace(/^example:/, "http:")).searchParams.get("invocationId");
+
+  return {
+    acked,
+    stored,
+    module: {
+      async clearDonations() {},
+      async donate() {},
+      async updateDynamicShortcuts() {},
+      async getPendingIntentURLs() {
+        return [...stored];
+      },
+      async acknowledgeIntent(invocationId: string) {
+        acked.push(invocationId);
+        const index = stored.findIndex((url) => idOf(url) === invocationId);
+
+        if (index >= 0) {
+          stored.splice(index, 1);
+        }
+      },
+    },
+  };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("runtime delivers the same intent twice when each run has its own invocationId", async () => {
+  const linking = createLinkingAdapter();
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: createFakeNative().module as never,
+  });
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  const base = buildIntentUrl("example", pingIntent, {});
+
+  linking.emit(withInvocation(base, "a"));
+  await settle();
+  linking.emit(withInvocation(base, "b"));
+  await settle();
+  linking.emit(withInvocation(base, "b"));
+  await settle();
+
+  assert.equal(calls, 2);
+});
+
+test("runtime still dedupes urls without an invocationId", async () => {
+  const linking = createLinkingAdapter();
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: createFakeNative().module as never,
+  });
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  const base = buildIntentUrl("example", pingIntent, {});
+
+  linking.emit(base);
+  await settle();
+  linking.emit(base);
+  await settle();
+
+  assert.equal(calls, 1);
+});
+
+test("runtime acknowledges a run only after its handlers settle", async () => {
+  const linking = createLinkingAdapter();
+  const native = createFakeNative();
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: native.module,
+  });
+  let finish: () => void = () => {};
+  runtime.onIntent(
+    pingIntent,
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+
+  linking.emit(withInvocation(buildIntentUrl("example", pingIntent, {}), "slow"));
+  await settle();
+  assert.deepEqual(native.acked, []);
+
+  finish();
+  await settle();
+  assert.deepEqual(native.acked, ["slow"]);
+});
+
+test("runtime acknowledges a run when its handler throws", async () => {
+  const linking = createLinkingAdapter();
+  const native = createFakeNative();
+  const runtime = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: linking.adapter,
+    nativeModule: native.module,
+  });
+  const originalError = console.error;
+  console.error = () => {};
+  runtime.onIntent(pingIntent, () => {
+    throw new Error("boom");
+  });
+
+  linking.emit(withInvocation(buildIntentUrl("example", pingIntent, {}), "bad"));
+  await settle();
+  console.error = originalError;
+
+  assert.deepEqual(native.acked, ["bad"]);
+});
+
+test("an unacknowledged run is delivered again to a fresh runtime", async () => {
+  const native = createFakeNative();
+  native.stored.push(withInvocation(buildIntentUrl("example", pingIntent, {}), "lost"));
+  const makeLinking = () => {
+    let listener: ((event: { url: string }) => void) | null = null;
+
+    return {
+      addEventListener(_event: "url", next: (event: { url: string }) => void) {
+        listener = next;
+        void native.module.getPendingIntentURLs().then((urls) => {
+          urls.forEach((url) => listener?.({ url }));
+        });
+        return { remove() {} };
+      },
+      async getInitialURL() {
+        return null;
+      },
+    };
+  };
+
+  const first = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: makeLinking(),
+    nativeModule: native.module,
+  });
+  first.onIntent(pingIntent, () => new Promise<void>(() => {}));
+  await settle();
+  assert.deepEqual(native.acked, []);
+  first.dispose();
+
+  const second = createAppIntentsRuntime({
+    scheme: "example",
+    intents: [pingIntent] as const,
+    linking: makeLinking(),
+    nativeModule: native.module,
+  });
+  let calls = 0;
+  second.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  await settle();
+
+  assert.equal(calls, 1);
+  assert.deepEqual(native.acked, ["lost"]);
+  assert.deepEqual(native.stored, []);
+});

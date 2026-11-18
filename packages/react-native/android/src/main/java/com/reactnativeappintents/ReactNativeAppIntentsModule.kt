@@ -17,6 +17,7 @@ import com.facebook.react.bridge.ReadableMap
 import java.lang.ref.WeakReference
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.UUID
 
 class ReactNativeAppIntentsModule(
   reactContext: ReactApplicationContext,
@@ -94,8 +95,23 @@ class ReactNativeAppIntentsModule(
 
   @ReactMethod
   fun getInitialIntentURL(promise: Promise) {
-    val currentUrl = if (pendingUrls.isEmpty()) null else pendingUrls.removeFirst()
-    promise.resolve(currentUrl)
+    promise.resolve(synchronized(pendingUrls) { pendingUrls.firstOrNull() })
+  }
+
+  @ReactMethod
+  fun getPendingIntentURLs(promise: Promise) {
+    val urls = synchronized(pendingUrls) { pendingUrls.toList() }
+    val result = com.facebook.react.bridge.Arguments.createArray()
+    urls.forEach { result.pushString(it) }
+    promise.resolve(result)
+  }
+
+  @ReactMethod
+  fun acknowledgeIntent(invocationId: String, promise: Promise) {
+    synchronized(pendingUrls) {
+      pendingUrls.removeAll { Uri.parse(it).getQueryParameter(INVOCATION_ID_PARAM) == invocationId }
+    }
+    promise.resolve(null)
   }
 
   @ReactMethod
@@ -279,6 +295,8 @@ class ReactNativeAppIntentsModule(
     private const val DYNAMIC_SHORTCUT_IDS_KEY = "dynamicShortcutIds"
     private const val PREFERENCES_NAME = "ReactNativeAppIntents"
     private val ANDROID_SHORTCUT_ICON_PATTERN = Regex("^@(drawable|mipmap)/([A-Za-z0-9_]+)$")
+    private const val INVOCATION_ID_PARAM = "invocationId"
+    private const val MAX_PENDING_URLS = 100
     private val pendingUrls = ArrayDeque<String>()
     private var reactContextRef: WeakReference<ReactApplicationContext>? = null
 
@@ -292,12 +310,28 @@ class ReactNativeAppIntentsModule(
       handleUrl(uri.toString())
     }
 
-    private fun handleUrl(url: String?) {
-      if (url == null) {
+    private fun handleUrl(rawUrl: String?) {
+      if (rawUrl == null) {
         return
       }
 
-      pendingUrls.addLast(url)
+      val uri = Uri.parse(rawUrl)
+      val url = if (uri.getQueryParameter(INVOCATION_ID_PARAM) == null) {
+        uri.buildUpon()
+          .appendQueryParameter(INVOCATION_ID_PARAM, UUID.randomUUID().toString())
+          .build()
+          .toString()
+      } else {
+        rawUrl
+      }
+
+      synchronized(pendingUrls) {
+        pendingUrls.addLast(url)
+
+        while (pendingUrls.size > MAX_PENDING_URLS) {
+          pendingUrls.removeFirst()
+        }
+      }
 
       val reactContext = reactContextRef?.get() ?: return
       val payload = com.facebook.react.bridge.Arguments.createMap().apply {

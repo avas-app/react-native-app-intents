@@ -3,7 +3,6 @@
 #import <Intents/Intents.h>
 #import <UIKit/UIKit.h>
 
-static NSMutableArray<NSString *> *ReactNativeAppIntentsPendingURLs = nil;
 static __weak ReactNativeAppIntents *ReactNativeAppIntentsCurrentModule = nil;
 static NSString *const ReactNativeAppIntentsAppGroupInfoKey = @"ReactNativeAppIntentsAppGroupIdentifier";
 static NSString *const ReactNativeAppIntentsPendingURLsDefaultsKey = @"ReactNativeAppIntentsPendingURLs";
@@ -23,25 +22,59 @@ static NSUserDefaults *ReactNativeAppIntentsUserDefaults(void)
   return [NSUserDefaults standardUserDefaults];
 }
 
-static void ReactNativeAppIntentsEnsurePendingQueue(void)
+static const NSUInteger ReactNativeAppIntentsMaxPendingURLs = 100;
+
+static NSString *ReactNativeAppIntentsInvocationID(NSString *url)
 {
-  if (ReactNativeAppIntentsPendingURLs == nil) {
-    ReactNativeAppIntentsPendingURLs = [NSMutableArray new];
+  NSURLComponents *components = [NSURLComponents componentsWithString:url];
+
+  for (NSURLQueryItem *item in components.queryItems) {
+    if ([item.name isEqualToString:@"invocationId"]) {
+      return item.value;
+    }
   }
+
+  return nil;
 }
 
-static void ReactNativeAppIntentsImportPersistedPendingURLs(void)
+static NSString *ReactNativeAppIntentsEnsureInvocationID(NSString *url)
 {
-  NSArray<NSString *> *persistedURLs =
-    [ReactNativeAppIntentsUserDefaults() stringArrayForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
-
-  if (persistedURLs.count == 0) {
-    return;
+  if (ReactNativeAppIntentsInvocationID(url) != nil) {
+    return url;
   }
 
-  ReactNativeAppIntentsEnsurePendingQueue();
-  [ReactNativeAppIntentsPendingURLs addObjectsFromArray:persistedURLs];
-  [ReactNativeAppIntentsUserDefaults() removeObjectForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+  NSURLComponents *components = [NSURLComponents componentsWithString:url];
+
+  if (components == nil) {
+    return url;
+  }
+
+  NSMutableArray<NSURLQueryItem *> *items = [(components.queryItems ?: @[]) mutableCopy];
+  [items addObject:[NSURLQueryItem queryItemWithName:@"invocationId" value:[[NSUUID UUID] UUIDString]]];
+  components.queryItems = items;
+
+  return components.string ?: url;
+}
+
+// UserDefaults is the only store: runs stay there until JS acknowledges them.
+static NSArray<NSString *> *ReactNativeAppIntentsPendingURLsSnapshot(void)
+{
+  NSArray<NSString *> *urls =
+    [ReactNativeAppIntentsUserDefaults() stringArrayForKey:ReactNativeAppIntentsPendingURLsDefaultsKey] ?: @[];
+  NSMutableArray<NSString *> *normalized = [NSMutableArray arrayWithCapacity:urls.count];
+  BOOL changed = NO;
+
+  for (NSString *url in urls) {
+    NSString *withId = ReactNativeAppIntentsEnsureInvocationID(url);
+    changed = changed || ![withId isEqualToString:url];
+    [normalized addObject:withId];
+  }
+
+  if (changed) {
+    [ReactNativeAppIntentsUserDefaults() setObject:normalized forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+  }
+
+  return normalized;
 }
 
 @implementation ReactNativeAppIntents
@@ -78,8 +111,7 @@ RCT_EXPORT_MODULE(ReactNativeAppIntents)
 
 - (void)startObserving
 {
-  ReactNativeAppIntentsImportPersistedPendingURLs();
-  [self emitPendingIntentURLIfNeeded];
+  [self emitPendingIntentURLs];
 }
 
 RCT_REMAP_METHOD(
@@ -148,14 +180,38 @@ RCT_REMAP_METHOD(
   rejecter:(RCTPromiseRejectBlock)reject
 )
 {
-  ReactNativeAppIntentsImportPersistedPendingURLs();
-  NSString *url = ReactNativeAppIntentsPendingURLs.firstObject;
+  resolve(ReactNativeAppIntentsPendingURLsSnapshot().firstObject);
+}
 
-  if (url != nil) {
-    [ReactNativeAppIntentsPendingURLs removeObjectAtIndex:0];
+RCT_REMAP_METHOD(
+  getPendingIntentURLs,
+  getPendingIntentURLsWithResolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  resolve(ReactNativeAppIntentsPendingURLsSnapshot());
+}
+
+RCT_REMAP_METHOD(
+  acknowledgeIntent,
+  acknowledgeIntent:(NSString *)invocationId
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+{
+  @synchronized([ReactNativeAppIntents class]) {
+    NSMutableArray<NSString *> *urls = [ReactNativeAppIntentsPendingURLsSnapshot() mutableCopy];
+
+    for (NSInteger index = (NSInteger)urls.count - 1; index >= 0; index--) {
+      if ([ReactNativeAppIntentsInvocationID(urls[index]) isEqualToString:invocationId]) {
+        [urls removeObjectAtIndex:index];
+      }
+    }
+
+    [ReactNativeAppIntentsUserDefaults() setObject:urls forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
   }
 
-  resolve(url);
+  resolve(nil);
 }
 
 RCT_REMAP_METHOD(
@@ -208,26 +264,27 @@ RCT_REMAP_METHOD(
     return;
   }
 
-  if (ReactNativeAppIntentsPendingURLs == nil) {
-    ReactNativeAppIntentsEnsurePendingQueue();
+  NSString *stored = ReactNativeAppIntentsEnsureInvocationID(url);
+
+  @synchronized([ReactNativeAppIntents class]) {
+    NSMutableArray<NSString *> *urls = [ReactNativeAppIntentsPendingURLsSnapshot() mutableCopy];
+    [urls addObject:stored];
+
+    if (urls.count > ReactNativeAppIntentsMaxPendingURLs) {
+      [urls removeObjectsInRange:NSMakeRange(0, urls.count - ReactNativeAppIntentsMaxPendingURLs)];
+    }
+
+    [ReactNativeAppIntentsUserDefaults() setObject:urls forKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
   }
 
-  [ReactNativeAppIntentsPendingURLs addObject:[url copy]];
-
-  if (ReactNativeAppIntentsCurrentModule != nil) {
-    [ReactNativeAppIntentsCurrentModule emitPendingIntentURLIfNeeded];
-  }
+  [ReactNativeAppIntentsCurrentModule sendEventWithName:@"appIntentUrl" body:@{ @"url": stored }];
 }
 
-- (void)emitPendingIntentURLIfNeeded
+- (void)emitPendingIntentURLs
 {
-  NSString *url = ReactNativeAppIntentsPendingURLs.firstObject;
-
-  if (url == nil) {
-    return;
+  for (NSString *url in ReactNativeAppIntentsPendingURLsSnapshot()) {
+    [self sendEventWithName:@"appIntentUrl" body:@{ @"url": url }];
   }
-
-  [self sendEventWithName:@"appIntentUrl" body:@{ @"url": url }];
 }
 
 @end

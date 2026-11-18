@@ -146,6 +146,10 @@ test("generateAppIntents writes bare RN artifacts from intent definitions", asyn
     assert.match(generatedSwift, /struct CheckDeliveryIntent: AppIntent/);
     assert.match(generatedSwift, /struct GeneratedAppShortcuts: AppShortcutsProvider/);
     assert.match(generatedSwift, /enqueueReactNativeAppIntentURL/);
+    assert.match(
+      generatedSwift,
+      /URLQueryItem\(name: "invocationId", value: UUID\(\)\.uuidString\)/,
+    );
     assert.match(generatedSwift, /static var parameterSummary: some ParameterSummary/);
     assert.match(
       generatedSwift,
