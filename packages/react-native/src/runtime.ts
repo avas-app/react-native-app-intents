@@ -767,10 +767,14 @@ export function useAppEntityTag(
       return;
     }
 
-    const { findNodeHandle } = require("react-native") as {
-      findNodeHandle(instance: unknown): number | null;
-    };
-    const reactTag = findNodeHandle(ref.current);
+    // findNodeHandle loads the Paper renderer on RN 0.85 and crashes the new architecture, so read the Fabric tag first.
+    const fabricTag = (ref.current as { __nativeTag?: unknown }).__nativeTag;
+    const reactTag =
+      typeof fabricTag === "number"
+        ? fabricTag
+        : (
+            require("react-native") as { findNodeHandle(instance: unknown): number | null }
+          ).findNodeHandle(ref.current);
 
     if (reactTag === null || reactTag === undefined) {
       return;
