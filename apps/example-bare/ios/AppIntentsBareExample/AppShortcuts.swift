@@ -2,17 +2,6 @@ import AppIntents
 import CoreSpotlight
 import Foundation
 import UIKit
-import os
-
-let dbgLog = Logger(subsystem: "dbg.spot", category: "sync")
-
-func dbgListIndex(_ tag: String) {
-  let q = CSSearchQuery(queryString: "displayName == \"*\"wc", queryContext: nil)
-  var found: [String] = []
-  q.foundItemsHandler = { items in found += items.map { $0.uniqueIdentifier } }
-  q.completionHandler = { err in dbgLog.notice("DBG \(tag, privacy: .public) index holds \(found.joined(separator: ","), privacy: .public) err=\(String(describing: err), privacy: .public)") }
-  q.start()
-}
 
 private let reactNativeAppIntentsAppGroupInfoKey = "ReactNativeAppIntentsAppGroupIdentifier"
 private let reactNativeAppIntentsAppGroupIdentifier: String? = "group.com.avasapp.appintents.example"
@@ -286,7 +275,6 @@ extension OrderEntityCatalog {
       try await index.deleteAppEntities(ofType: OrderAppEntity.self)
     }
 
-    dbgLog.notice("DBG sync rebuild=\(rebuild, privacy: .public) previous=\(previous.keys.sorted().joined(separator: ","), privacy: .public) visible=\(visible.map { $0.id }.joined(separator: ","), privacy: .public)")
     let current = Dictionary(visible.map { ($0.id, $0.fingerprint) }, uniquingKeysWith: { first, _ in first })
     let removed = previous.keys.filter { current[$0] == nil }
 
@@ -300,10 +288,7 @@ extension OrderEntityCatalog {
       try await index.indexAppEntities(changed.map { OrderAppEntity(id: $0.id) }, priority: 0)
     }
 
-    dbgLog.notice("DBG sync done removed=\(removed.joined(separator: ","), privacy: .public) changed=\(changed.map { $0.id }.joined(separator: ","), privacy: .public)")
     defaults.set(current, forKey: indexedKey)
-    try? await Task.sleep(nanoseconds: 3_000_000_000)
-    dbgListIndex("after-sync")
   }
 }
 
@@ -444,7 +429,6 @@ private final class ReactNativeAppIntentsIndexDelegate: NSObject, CSSearchableIn
     _ searchableIndex: CSSearchableIndex,
     reindexAllSearchableItemsWithAcknowledgementHandler acknowledgementHandler: @escaping () -> Void
   ) {
-    dbgLog.notice("DBG delegate reindex called")
     Task {
       try? await ReactNativeAppIntentsGeneratedBridge.syncCatalog(entityId: nil, rebuild: true)
       acknowledgementHandler()
@@ -456,7 +440,6 @@ private final class ReactNativeAppIntentsIndexDelegate: NSObject, CSSearchableIn
     reindexSearchableItemsWithIdentifiers identifiers: [String],
     acknowledgementHandler: @escaping () -> Void
   ) {
-    dbgLog.notice("DBG delegate reindex called")
     Task {
       try? await ReactNativeAppIntentsGeneratedBridge.syncCatalog(entityId: nil, rebuild: true)
       acknowledgementHandler()
