@@ -12,12 +12,40 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
-import { exampleRuntime, openOrder, openSavedOrder } from "@react-native-app-intents/example";
+import { type EntityCatalogEntry, useOnscreenEntity } from "@avasapp/react-native-app-intents";
+import {
+  Order,
+  exampleRuntime,
+  openOrder,
+  openSavedOrder,
+} from "@react-native-app-intents/example";
 
 interface EventLogEntry {
   id: string;
   params: Record<string, unknown>;
 }
+
+const SAMPLE_ORDERS: readonly EntityCatalogEntry<typeof Order>[] = [
+  {
+    id: "4521",
+    title: "Order 4521",
+    subtitle: "Arrives Tue",
+    synonyms: ["last order"],
+    value: { customer: "Taylor", id: 4521, number: "4521" },
+  },
+  {
+    id: "4522",
+    title: "Order 4522",
+    subtitle: "Arrives Thu",
+    value: { customer: "Jordan", id: 4522, number: "4522" },
+  },
+  {
+    id: "4523",
+    title: "Order 4523",
+    subtitle: "Delivered",
+    value: { customer: "Sam", id: 4523, number: "4523" },
+  },
+];
 
 const INITIAL_INTENT_ATTEMPTS = 12;
 const INITIAL_INTENT_RETRY_DELAY_MS = 250;
@@ -39,7 +67,14 @@ function App(): ReactElement {
 function AppContent(): ReactElement {
   const [initialIntentId, setInitialIntentId] = useState<string | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
+  const [onscreenOrderId, setOnscreenOrderId] = useState<string | null>(null);
   const savedOrder = useMemo(() => ({ customer: "Taylor", id: 1, number: "1234" }), []);
+
+  useOnscreenEntity(Order, onscreenOrderId);
+
+  useEffect(() => {
+    void exampleRuntime.setEntities(Order, SAMPLE_ORDERS);
+  }, []);
   const simulateIntentUrl = useMemo(
     () => exampleRuntime.buildUrl(openOrder, { orderNumber: "1234" }),
     [],
@@ -180,6 +215,28 @@ function AppContent(): ReactElement {
         <Text style={styles.body}>
           {initialIntentId ?? "No initial app-intent URL was consumed."}
         </Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>On-screen order</Text>
+        <Text style={styles.body}>{onscreenOrderId ?? "No order is on screen."}</Text>
+        <View style={styles.actions}>
+          {SAMPLE_ORDERS.map((order) => (
+            <Button
+              key={order.id}
+              onPress={() => {
+                setOnscreenOrderId(order.id);
+              }}
+              title={`Show ${order.title}`}
+            />
+          ))}
+          <Button
+            onPress={() => {
+              setOnscreenOrderId(null);
+            }}
+            title="Clear on-screen order"
+          />
+        </View>
       </View>
 
       <View style={styles.card}>
