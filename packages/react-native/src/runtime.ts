@@ -800,6 +800,14 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
               lastHandledUrl = nativeUrl;
               markSeen(nativeId);
               acknowledge(nativeId);
+              // An iOS cold-start openURL link has no id and is not in the native list; deliver it too.
+              void initialUrlPromise
+                .then((linkingUrl) => {
+                  if (linkingUrl && !getInvocationId(linkingUrl)) {
+                    return dispatch(linkingUrl);
+                  }
+                })
+                .catch((error) => console.error(error));
               void flushPendingEvents();
               return nativeEvent;
             }

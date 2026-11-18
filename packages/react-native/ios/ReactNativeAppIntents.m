@@ -91,10 +91,22 @@ static void ReactNativeAppIntentsMigrateLegacy(NSUserDefaults *defaults)
   }
 
   NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  NSUInteger migrated = 0;
 
-  for (NSUInteger index = 0; index < legacy.count; index++) {
-    ReactNativeAppIntentsStoreRun(
-      defaults, ReactNativeAppIntentsEnsureInvocationID(legacy[index]), now - 1000.0 + index * 0.001);
+  // Old generated Swift appends without our lock, so re-read before removing and migrate what arrived meanwhile.
+  for (int attempt = 0; attempt < 5; attempt++) {
+    for (; migrated < legacy.count; migrated++) {
+      ReactNativeAppIntentsStoreRun(
+        defaults, ReactNativeAppIntentsEnsureInvocationID(legacy[migrated]), now - 1000.0 + migrated * 0.001);
+    }
+
+    NSArray<NSString *> *latest = [defaults stringArrayForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
+
+    if (latest == nil || latest.count <= migrated) {
+      break;
+    }
+
+    legacy = latest;
   }
 
   [defaults removeObjectForKey:ReactNativeAppIntentsPendingURLsDefaultsKey];
@@ -378,7 +390,11 @@ RCT_REMAP_METHOD(
     ReactNativeAppIntentsTrim(defaults);
   }
 
-  [ReactNativeAppIntentsCurrentModule sendEventWithName:@"appIntentUrl" body:@{ @"url": stored }];
+  ReactNativeAppIntents *module = ReactNativeAppIntentsCurrentModule;
+
+  if (module.observing) {
+    [module sendEventWithName:@"appIntentUrl" body:@{ @"url": stored }];
+  }
 }
 
 - (void)emitPendingIntentURLs

@@ -323,10 +323,10 @@ private func handleShortcutItem(_ shortcutItem: UIApplicationShortcutItem) -> Bo
 
 Android app-intents links are routed through the generated manifest intent filter
 for `scheme://app-intents`. Normal app deep links should keep flowing through
-React Native `Linking`; if you manually call `ReactNativeAppIntentsModule.handleIntent`
-from `MainActivity`, the native helper only queues URLs whose host is
-`app-intents`. Keep calling `super.onNewIntent(intent)` and `setIntent(intent)`
-so React Native can handle the rest of the app's links.
+React Native `Linking`. The native module records app-intents links itself, from
+the launch intent and from `onNewIntent`, so no `MainActivity` code is needed.
+Calling `ReactNativeAppIntentsModule.handleIntent` from `MainActivity` is optional
+and kept for older setups; an intent is never recorded twice.
 
 ## Handle intents at runtime
 

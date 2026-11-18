@@ -95,15 +95,18 @@ beforeEach(() => {
 
 test("default linking: listener is attached before the native read, so a run enqueued during it is not lost", async () => {
   const native = createNative([withId(base, "a")]);
+  // A run enqueued while the read is in flight is only seen if the listener already exists.
+  const read = native.getPendingIntentURLs.bind(native);
+  native.getPendingIntentURLs = async () => {
+    rn.nativeListeners.forEach((listener) => listener({ url: withId(base, "b") }));
+    return read();
+  };
   rn.native = native;
   const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
   const ids: string[] = [];
   runtime.onAnyIntent((event) => {
     ids.push(event.url);
   });
-
-  assert.equal(rn.nativeListeners.length, 1);
-  rn.nativeListeners[0]?.({ url: withId(base, "b") });
   await settle();
 
   assert.deepEqual(ids.sort(), [withId(base, "a"), withId(base, "b")]);
@@ -225,4 +228,67 @@ test("default linking: on iOS an app-intents link opened by URL still arrives th
   await settle();
 
   assert.deepEqual(urls, [`${base}&warm=1`]);
+});
+
+test("default linking: Android relies on native recording the run; a Linking-only copy is not delivered", async () => {
+  rn.native = createNative();
+  rn.linkingInitialUrl = withId(base, "only-linking");
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  rn.linkingListeners.forEach((listener) => listener({ url: withId(base, "only-linking") }));
+  await settle();
+
+  assert.equal(calls, 0);
+});
+
+test("default linking: Android delivers a run once when native records the launch intent", async () => {
+  const native = createNative([withId(base, "launch")]);
+  rn.native = native;
+  rn.linkingInitialUrl = withId(base, "launch");
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  rn.linkingListeners.forEach((listener) => listener({ url: withId(base, "launch") }));
+  await settle();
+
+  assert.equal(calls, 1);
+  assert.deepEqual(native.acked, ["launch"]);
+});
+
+test("default linking: on iOS a native run and its in-process event deliver once", async () => {
+  rn.os = "ios";
+  const native = createNative([withId(base, "i1")]);
+  rn.native = native;
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  let calls = 0;
+  runtime.onIntent(pingIntent, () => {
+    calls += 1;
+  });
+  rn.nativeListeners.forEach((listener) => listener({ url: withId(base, "i1") }));
+  rn.appStateListeners.forEach((listener) => listener("active"));
+  await settle();
+
+  assert.equal(calls, 1);
+  assert.deepEqual(native.acked, ["i1"]);
+});
+
+test("default linking: an iOS cold-start Linking url is delivered even when getInitialIntent returns a native run", async () => {
+  rn.os = "ios";
+  rn.native = createNative([withId(base, "n1")]);
+  rn.linkingInitialUrl = base;
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  const urls: string[] = [];
+  runtime.onAnyIntent((event) => {
+    urls.push(event.url);
+  });
+  const first = await runtime.getInitialIntent();
+  await settle();
+
+  assert.equal(first?.url, withId(base, "n1"));
+  assert.ok(urls.includes(base));
 });
