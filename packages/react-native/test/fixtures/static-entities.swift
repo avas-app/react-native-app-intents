@@ -1,0 +1,294 @@
+import AppIntents
+import Foundation
+
+private let reactNativeAppIntentsAppGroupInfoKey = "ReactNativeAppIntentsAppGroupIdentifier"
+private let reactNativeAppIntentsAppGroupIdentifier: String? = "group.com.avasapp.appintents.example"
+private let reactNativeAppIntentsPendingURLsKey = "ReactNativeAppIntentsPendingURLs"
+private func reactNativeAppIntentsUserDefaults() -> UserDefaults {
+  if let suiteName = reactNativeAppIntentsAppGroupIdentifier,
+     let sharedDefaults = UserDefaults(suiteName: suiteName) {
+    return sharedDefaults
+  }
+
+  if let suiteName = Bundle.main.object(forInfoDictionaryKey: reactNativeAppIntentsAppGroupInfoKey) as? String,
+     let sharedDefaults = UserDefaults(suiteName: suiteName) {
+    return sharedDefaults
+  }
+
+  return UserDefaults.standard
+}
+private func enqueueReactNativeAppIntentURL(_ url: URL) {
+  guard
+    let invocationId = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+      .queryItems?.first(where: { $0.name == "invocationId" })?.value,
+    !invocationId.isEmpty
+  else {
+    return
+  }
+
+  let defaults = reactNativeAppIntentsUserDefaults()
+  defaults.set(
+    ["url": url.absoluteString, "createdAt": Date().timeIntervalSince1970],
+    forKey: "\(reactNativeAppIntentsPendingURLsKey).\(invocationId)"
+  )
+  defaults.synchronize()
+  NotificationCenter.default.post(name: Notification.Name("ReactNativeAppIntentsDidEnqueue"), object: nil)
+}
+
+private func reactNativeAppIntentsJSONObject<T: Encodable>(_ value: T) throws -> Any {
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  let data = try encoder.encode(value)
+  return try JSONSerialization.jsonObject(with: data)
+}
+
+private func reactNativeAppIntentsJSONObject(fromJSONString json: String) throws -> Any {
+  let data = Data(json.utf8)
+  return try JSONSerialization.jsonObject(with: data)
+}
+
+private func reactNativeAppIntentsJSONString(_ payload: [String: Any]) throws -> String {
+  let data = try JSONSerialization.data(withJSONObject: payload)
+  return String(decoding: data, as: UTF8.self)
+}
+
+@available(iOS 16.0, *)
+struct OrderAppEntity: AppEntity {
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Order")
+  static let defaultQuery = OrderEntityQuery()
+
+  let id: String
+
+  var displayRepresentation: DisplayRepresentation {
+    OrderEntityCatalog.displayRepresentation(for: id)
+  }
+}
+
+@available(iOS 16.0, *)
+private struct OrderEntityRecord {
+  let id: String
+  let displayRepresentation: DisplayRepresentation
+  let jsonValue: String
+  let searchText: String
+}
+
+@available(iOS 16.0, *)
+private enum OrderEntityCatalog {
+  static let records: [OrderEntityRecord] = [
+    OrderEntityRecord(
+      id: "1",
+      displayRepresentation: DisplayRepresentation(title: "Order #1234", subtitle: "Taylor", image: DisplayRepresentation.Image(systemName: "bag")),
+      jsonValue: "{\"id\":1,\"number\":\"1234\",\"customer\":\"Taylor\"}",
+      searchText: "1 Order #1234 Taylor"
+    ),
+  ]
+  static let recordsById: [String: OrderEntityRecord] = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+  static let allEntities: [OrderAppEntity] = records.map { OrderAppEntity(id: $0.id) }
+
+  static func displayRepresentation(for id: String) -> DisplayRepresentation {
+    recordsById[id]?.displayRepresentation ?? DisplayRepresentation(title: "Unknown")
+  }
+
+  static func jsonValue(for id: String) throws -> String {
+    guard let record = recordsById[id] else {
+      throw NSError(
+        domain: "ReactNativeAppIntents",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Could not resolve App Entity payload."]
+      )
+    }
+
+    return record.jsonValue
+  }
+
+  static func entities(for identifiers: [String]) -> [OrderAppEntity] {
+    identifiers.compactMap { recordsById[$0].map { OrderAppEntity(id: $0.id) } }
+  }
+
+  static func search(matching query: String) -> [OrderAppEntity] {
+    if query.isEmpty {
+      return allEntities
+    }
+
+    let normalizedQuery = query.lowercased()
+
+    return records
+      .filter { $0.searchText.lowercased().contains(normalizedQuery) }
+      .map { OrderAppEntity(id: $0.id) }
+  }
+}
+
+@available(iOS 16.0, *)
+struct OrderEntityQuery: EntityQuery, EntityStringQuery {
+  func entities(for identifiers: [String]) async throws -> [OrderAppEntity] {
+    OrderEntityCatalog.entities(for: identifiers)
+  }
+
+  func suggestedEntities() async throws -> [OrderAppEntity] {
+    OrderEntityCatalog.allEntities
+  }
+
+  func entities(matching string: String) async throws -> [OrderAppEntity] {
+    OrderEntityCatalog.search(matching: string)
+  }
+}
+
+@available(iOS 16.0, *)
+struct CheckDeliveryIntent: AppIntent {
+  static let title: LocalizedStringResource = "Check Delivery"
+  static let description = IntentDescription("")
+  static let openAppWhenRun = false
+
+  static var parameterSummary: some ParameterSummary {
+    Summary("Check Delivery \(\.$deliveryWindow__startDate) \(\.$deliveryWindow__destination__city)")
+  }
+
+  @Parameter(
+    title: "Start Date",
+  )
+  var deliveryWindow__startDate: Date
+
+  @Parameter(
+    title: "City",
+  )
+  var deliveryWindow__destination__city: String?
+
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    var payload: [String: Any] = [:]
+    var deliveryWindowPayload: [String: Any] = [:]
+    deliveryWindowPayload["startDate"] = try reactNativeAppIntentsJSONObject(deliveryWindow__startDate)
+    var deliveryWindow__destinationPayload: [String: Any] = [:]
+    if let deliveryWindow__destination__cityValue = deliveryWindow__destination__city {
+      deliveryWindow__destinationPayload["city"] = try reactNativeAppIntentsJSONObject(deliveryWindow__destination__cityValue)
+    }
+    deliveryWindowPayload["destination"] = deliveryWindow__destinationPayload
+    payload["deliveryWindow"] = deliveryWindowPayload
+    let payloadString = try reactNativeAppIntentsJSONString(payload)
+    var components = URLComponents()
+    components.scheme = "example"
+    components.host = "app-intents"
+    components.path = "/checkDelivery"
+    components.queryItems = [
+      URLQueryItem(name: "payload", value: payloadString),
+      URLQueryItem(name: "invocationId", value: UUID().uuidString),
+    ]
+
+    guard let url = components.url else {
+      throw NSError(
+        domain: "ReactNativeAppIntents",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Could not create app-intents URL."]
+      )
+    }
+
+    enqueueReactNativeAppIntentURL(url)
+    return .result(dialog: IntentDialog("Checking delivery window."))
+  }
+}
+
+@available(iOS 16.0, *)
+struct OpenOrderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Open Order"
+  static let description = IntentDescription("Open a specific order.")
+  static let openAppWhenRun = false
+
+  static var parameterSummary: some ParameterSummary {
+    Summary("Open Order \(\.$orderNumber)")
+  }
+
+  @Parameter(
+    title: "Order Number",
+  )
+  var orderNumber: String
+
+  func perform() async throws -> some IntentResult {
+    var payload: [String: Any] = [:]
+    payload["orderNumber"] = try reactNativeAppIntentsJSONObject(orderNumber)
+    let payloadString = try reactNativeAppIntentsJSONString(payload)
+    var components = URLComponents()
+    components.scheme = "example"
+    components.host = "app-intents"
+    components.path = "/openOrder"
+    components.queryItems = [
+      URLQueryItem(name: "payload", value: payloadString),
+      URLQueryItem(name: "invocationId", value: UUID().uuidString),
+    ]
+
+    guard let url = components.url else {
+      throw NSError(
+        domain: "ReactNativeAppIntents",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Could not create app-intents URL."]
+      )
+    }
+
+    enqueueReactNativeAppIntentURL(url)
+    return .result()
+  }
+}
+
+@available(iOS 16.0, *)
+struct OpenSavedOrderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Open Saved Order"
+  static let description = IntentDescription("Open a saved order.")
+  static let openAppWhenRun = false
+
+  static var parameterSummary: some ParameterSummary {
+    Summary("Open Saved Order \(\.$order)")
+  }
+
+  @Parameter(
+    title: "Order",
+  )
+  var order: OrderAppEntity
+
+  func perform() async throws -> some IntentResult {
+    var payload: [String: Any] = [:]
+    payload["order"] = try reactNativeAppIntentsJSONObject(fromJSONString: try OrderEntityCatalog.jsonValue(for: order.id))
+    let payloadString = try reactNativeAppIntentsJSONString(payload)
+    var components = URLComponents()
+    components.scheme = "example"
+    components.host = "app-intents"
+    components.path = "/openSavedOrder"
+    components.queryItems = [
+      URLQueryItem(name: "payload", value: payloadString),
+      URLQueryItem(name: "invocationId", value: UUID().uuidString),
+    ]
+
+    guard let url = components.url else {
+      throw NSError(
+        domain: "ReactNativeAppIntents",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Could not create app-intents URL."]
+      )
+    }
+
+    enqueueReactNativeAppIntentURL(url)
+    return .result()
+  }
+}
+
+@available(iOS 16.0, *)
+struct GeneratedAppShortcuts: AppShortcutsProvider {
+  static var appShortcuts: [AppShortcut] {
+    return [
+      AppShortcut(
+        intent: OpenOrderIntent(),
+        phrases: [
+          "Open order in \(.applicationName)",
+          "Show my order in \(.applicationName)",
+        ],
+        shortTitle: "Open Order",
+        systemImageName: "shippingbox"
+      ),
+      AppShortcut(
+        intent: OpenSavedOrderIntent(),
+        phrases: [
+          "Open \(\.$order) in \(.applicationName)",
+        ],
+        shortTitle: "Open Saved Order",
+        systemImageName: "square.grid.2x2"
+      ),
+    ]
+  }
+}

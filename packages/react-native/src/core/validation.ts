@@ -1,5 +1,10 @@
 import { ANDROID_APP_ACTION_CATALOG } from "./android-app-actions.js";
-import type { EntityDefinition, EntityDisplayRepresentation, EntityShape } from "./entity.js";
+import type {
+  EntityDefinition,
+  EntityDisplayRepresentation,
+  EntityShape,
+  EntitySpotlightOptions,
+} from "./entity.js";
 import type { AnyParameterDefinition, LocalizedText, ObjectParameterDefinition } from "./schema.js";
 import type {
   AndroidAppActionFulfillment,
@@ -61,10 +66,12 @@ export interface NormalizedEntityInventoryItem<
 export interface NormalizedEntityMetadata<
   TEntity extends EntityDefinition<any> = EntityDefinition<any>,
 > {
+  catalog: "static" | "runtime";
   entity: TEntity;
   id: string;
   inventory: readonly NormalizedEntityInventoryItem<TEntity>[];
   schema: TEntity["schema"];
+  spotlight?: { openIntentId: string };
   title: string;
 }
 
@@ -584,6 +591,18 @@ export function resolveLocalizedText(
   return typeof firstEntry === "string" ? firstEntry : fallback;
 }
 
+function resolveSpotlightOpenIntentId(spotlight: EntitySpotlightOptions): string | undefined {
+  try {
+    const target =
+      typeof spotlight.openIntent === "function" ? spotlight.openIntent() : spotlight.openIntent;
+    const id = typeof target === "string" ? target : target?.id;
+
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>(
   entity: TEntity,
 ): NormalizedEntityMetadata<TEntity> {
@@ -635,15 +654,45 @@ export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>
     },
   );
 
+  const catalog = entity.catalog ?? "static";
+
+  if (catalog !== "static" && catalog !== "runtime") {
+    appendIssue(
+      issues,
+      entity.id,
+      `catalog must be "static" or "runtime", got "${String(catalog)}".`,
+    );
+  }
+
+  const openIntentId = entity.spotlight
+    ? resolveSpotlightOpenIntentId(entity.spotlight)
+    : undefined;
+
+  if (entity.spotlight) {
+    if (!openIntentId) {
+      appendIssue(
+        issues,
+        entity.id,
+        "spotlight.openIntent must be an intent id, an intent from defineIntent(), or a function returning one.",
+      );
+    }
+
+    if (catalog !== "runtime") {
+      appendIssue(issues, entity.id, 'spotlight requires catalog: "runtime".');
+    }
+  }
+
   if (issues.length > 0) {
     throw new AppIntentsValidationError(issues);
   }
 
   return {
+    catalog,
     entity,
     id: entity.id,
     inventory,
     schema: entity.schema,
+    ...(openIntentId ? { spotlight: { openIntentId } } : {}),
     title: resolveLocalizedText(entity.title, entity.id) ?? entity.id,
   };
 }
@@ -850,5 +899,41 @@ export function normalizeReferencedEntities<TIntents extends readonly IntentDefi
     throw new AppIntentsValidationError(issues);
   }
 
-  return [...entitiesById.values()].map((entity) => normalizeEntityDefinition(entity));
+  const normalized = [...entitiesById.values()].map((entity) => normalizeEntityDefinition(entity));
+  const spotlightIssues: string[] = [];
+
+  for (const entity of normalized) {
+    if (!entity.spotlight) {
+      continue;
+    }
+
+    const openIntent = intents.find((intent) => intent.id === entity.spotlight?.openIntentId);
+
+    if (!openIntent) {
+      appendIssue(
+        spotlightIssues,
+        entity.id,
+        `spotlight.openIntent "${entity.spotlight.openIntentId}" is not one of the configured intents.`,
+      );
+      continue;
+    }
+
+    const entityParams = Object.values(
+      openIntent.params as Record<string, AnyParameterDefinition>,
+    ).filter((definition) => definition.kind === "entity" && definition.entity.id === entity.id);
+
+    if (entityParams.length !== 1 || entityParams[0]?.optional === true) {
+      appendIssue(
+        spotlightIssues,
+        entity.id,
+        `spotlight.openIntent "${openIntent.id}" must take exactly one required parameter of this entity.`,
+      );
+    }
+  }
+
+  if (spotlightIssues.length > 0) {
+    throw new AppIntentsValidationError(spotlightIssues);
+  }
+
+  return normalized;
 }

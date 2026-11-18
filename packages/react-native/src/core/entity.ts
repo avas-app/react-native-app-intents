@@ -1,3 +1,4 @@
+import type { IntentDefinition } from "./intent.js";
 import type { InferParameterValue, LocalizedText, ObjectParameterDefinition } from "./schema.js";
 
 /**
@@ -22,6 +23,15 @@ export interface EntityDisplayRepresentation {
   subtitle?: string;
   /** Optional image metadata shown alongside the entity. */
   image?: EntityImageRepresentation;
+}
+
+/** How an entity's values are supplied to native surfaces. */
+export type EntityCatalogMode = "static" | "runtime";
+
+/** Spotlight indexing options for an entity. */
+export interface EntitySpotlightOptions {
+  /** Intent that opens one entity when its Spotlight result is tapped. The intent's params reference this entity, so pass its id (or `() => intent`) to avoid a definition cycle. */
+  openIntent: IntentDefinition<any> | (() => IntentDefinition<any>) | string;
 }
 
 /** Input passed to an entity query callback. */
@@ -62,6 +72,10 @@ export interface EntityDefinition<
   identifier: (entity: InferParameterValue<TSchema>) => string;
   /** Returns the display metadata shown for a resolved entity record. This is important anywhere a native surface needs to show the entity to the user. */
   displayRepresentation: (entity: InferParameterValue<TSchema>) => EntityDisplayRepresentation;
+  /** `"static"` (default) bakes `inventory` into the app at codegen. `"runtime"` lets JS replace the values with `setEntities` while the app runs; `inventory` then only seeds the catalog until the first publish. */
+  catalog?: EntityCatalogMode;
+  /** iOS 18+: index this entity in Spotlight and run `openIntent` when a result is tapped. Requires `catalog: "runtime"`. `openIntent` must be one of the configured intents and take exactly one parameter of this entity. */
+  spotlight?: EntitySpotlightOptions;
   /** Optional runtime query used to resolve entities by search text or identifier. Define this when iOS App Intents / Siri should be able to search live data instead of relying purely on `inventory`; omit it for fully static catalogs. */
   query?: (
     input: EntityQueryInput,

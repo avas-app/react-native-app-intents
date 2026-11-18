@@ -81,6 +81,8 @@ interface SwiftRenderableParameter {
 }
 
 const IOS_PENDING_URLS_DEFAULTS_KEY = "ReactNativeAppIntentsPendingURLs";
+const ENTITY_CATALOG_KEY_PREFIX = "ReactNativeAppIntentsEntityCatalog.";
+const ENTITY_INDEXED_KEY_PREFIX = "ReactNativeAppIntentsIndexedEntities.";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
@@ -297,6 +299,7 @@ function buildIntentUrl(scheme: string, intentId: string, params: Record<string,
 function toSwiftAppShortcutPhrase(
   phrase: string,
   parametersByName: ReadonlyMap<string, NormalizedIntentMetadata["params"][number]>,
+  swiftNames: ReadonlyMap<string, string> = new Map(),
 ): string {
   const appNameSentinel = "__APP_NAME_PLACEHOLDER__";
   const parameterSentinelPattern = /__PARAMETER_PLACEHOLDER_([A-Za-z0-9_]+)__/g;
@@ -312,7 +315,7 @@ function toSwiftAppShortcutPhrase(
 
   return rendered.replace(
     parameterSentinelPattern,
-    (_match, parameterName: string) => `\\(\\.$${parameterName})`,
+    (_match, parameterName: string) => `\\(\\.$${swiftNames.get(parameterName) ?? parameterName})`,
   );
 }
 
@@ -834,6 +837,435 @@ function renderSwiftEntity(entity: NormalizedEntityMetadata): string {
   ].join("\n");
 }
 
+function renderSwiftRuntimeEntity(entity: NormalizedEntityMetadata): string {
+  const entityTypeName = getSwiftEntityTypeName(entity.id);
+  const entityQueryTypeName = getSwiftEntityQueryTypeName(entity.id);
+  const entityCatalogTypeName = getSwiftEntityCatalogTypeName(entity.id);
+  const entityRecordTypeName = getSwiftEntityRecordTypeName(entity.id);
+  const seedRecords = entity.inventory.map((item) => {
+    const searchText = [
+      item.identifier,
+      item.displayRepresentation.title,
+      item.displayRepresentation.subtitle,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return [
+      `    ${entityRecordTypeName}(`,
+      `      id: "${escapeSwiftString(item.identifier)}",`,
+      `      displayRepresentation: ${renderSwiftDisplayRepresentationLiteral(item.displayRepresentation)},`,
+      `      jsonValue: "${escapeSwiftString(item.jsonValue)}",`,
+      `      searchText: "${escapeSwiftString(searchText)}",`,
+      "      hideInSpotlight: false,",
+      `      title: "${escapeSwiftString(item.displayRepresentation.title)}",`,
+      `      subtitle: ${item.displayRepresentation.subtitle ? `"${escapeSwiftString(item.displayRepresentation.subtitle)}"` : "nil"},`,
+      `      fingerprint: "${escapeSwiftString(JSON.stringify([item.identifier, item.displayRepresentation, item.jsonValue]))}"`,
+      "    ),",
+    ].join("\n");
+  });
+  const lines = [
+    "@available(iOS 16.0, *)",
+    `struct ${entityTypeName}: AppEntity {`,
+    `  static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "${escapeSwiftString(entity.title)}")`,
+    `  static let defaultQuery = ${entityQueryTypeName}()`,
+    "",
+    "  let id: String",
+    "",
+    "  var displayRepresentation: DisplayRepresentation {",
+    `    ${entityCatalogTypeName}.displayRepresentation(for: id)`,
+    "  }",
+    "}",
+    "",
+  ];
+
+  if (entity.spotlight) {
+    lines.push(
+      "@available(iOS 18.0, *)",
+      `extension ${entityTypeName}: IndexedEntity {`,
+      "  var hideInSpotlight: Bool {",
+      `    ${entityCatalogTypeName}.record(for: id)?.hideInSpotlight ?? true`,
+      "  }",
+      "",
+      "  var attributeSet: CSSearchableItemAttributeSet {",
+      "    let attributes = defaultAttributeSet",
+      `    if let record = ${entityCatalogTypeName}.record(for: id) {`,
+      "      attributes.displayName = record.title",
+      "      attributes.contentDescription = record.subtitle",
+      "      attributes.keywords = record.synonyms",
+      "    }",
+      "    return attributes",
+      "  }",
+      "}",
+      "",
+    );
+  }
+
+  lines.push(
+    "@available(iOS 16.0, *)",
+    `private struct ${entityRecordTypeName} {`,
+    "  let id: String",
+    "  let displayRepresentation: DisplayRepresentation",
+    "  let jsonValue: String",
+    "  let searchText: String",
+    "  let hideInSpotlight: Bool",
+    "  let fingerprint: String",
+    "  let title: String",
+    "  let subtitle: String?",
+    "  let synonyms: [String]",
+    "",
+    "  init(",
+    "    id: String,",
+    "    displayRepresentation: DisplayRepresentation,",
+    "    jsonValue: String,",
+    "    searchText: String,",
+    "    hideInSpotlight: Bool,",
+    "    title: String,",
+    "    subtitle: String?,",
+    "    fingerprint: String",
+    "  ) {",
+    "    self.id = id",
+    "    self.displayRepresentation = displayRepresentation",
+    "    self.jsonValue = jsonValue",
+    "    self.searchText = searchText",
+    "    self.hideInSpotlight = hideInSpotlight",
+    "    self.title = title",
+    "    self.subtitle = subtitle",
+    "    self.synonyms = []",
+    "    self.fingerprint = fingerprint",
+    "  }",
+    "",
+    "  init(entry: ReactNativeAppIntentsCatalogEntry) {",
+    "    self.id = entry.id",
+    "    self.title = entry.title",
+    "    self.subtitle = entry.subtitle",
+    "    self.synonyms = entry.synonyms",
+    "    self.displayRepresentation = DisplayRepresentation(",
+    "      title: LocalizedStringResource(stringLiteral: entry.title),",
+    "      subtitle: entry.subtitle.map { LocalizedStringResource(stringLiteral: $0) }",
+    "    )",
+    "    self.jsonValue = entry.jsonValue",
+    '    self.searchText = ([entry.id, entry.title] + [entry.subtitle].compactMap { $0 } + entry.synonyms).joined(separator: " ")',
+    "    self.hideInSpotlight = entry.hideInSpotlight",
+    "    self.fingerprint = entry.fingerprint",
+    "  }",
+    "}",
+    "",
+    "@available(iOS 16.0, *)",
+    `private enum ${entityCatalogTypeName} {`,
+    `  static let storeKey = "${ENTITY_CATALOG_KEY_PREFIX}${escapeSwiftString(entity.id)}"`,
+    `  static let indexedKey = "${ENTITY_INDEXED_KEY_PREFIX}${escapeSwiftString(entity.id)}"`,
+    `  static let seedRecords: [${entityRecordTypeName}] = [`,
+    ...seedRecords,
+    "  ]",
+    "",
+    `  static var records: [${entityRecordTypeName}] {`,
+    `    reactNativeAppIntentsCatalogEntries(forKey: storeKey)?.map { ${entityRecordTypeName}(entry: $0) } ?? seedRecords`,
+    "  }",
+    "",
+    `  static func record(for id: String) -> ${entityRecordTypeName}? {`,
+    "    records.first { $0.id == id }",
+    "  }",
+    "",
+    "  static func displayRepresentation(for id: String) -> DisplayRepresentation {",
+    '    record(for: id)?.displayRepresentation ?? DisplayRepresentation(title: "Unknown")',
+    "  }",
+    "",
+    "  static func jsonValue(for id: String) throws -> String {",
+    "    guard let record = record(for: id) else {",
+    "      throw NSError(",
+    '        domain: "ReactNativeAppIntents",',
+    "        code: 2,",
+    '        userInfo: [NSLocalizedDescriptionKey: "Could not resolve App Entity payload."]',
+    "      )",
+    "    }",
+    "",
+    "    return record.jsonValue",
+    "  }",
+    "",
+    `  static func entities(for identifiers: [String]) -> [${entityTypeName}] {`,
+    "    let all = records",
+    `    return identifiers.compactMap { id in all.first { $0.id == id }.map { ${entityTypeName}(id: $0.id) } }`,
+    "  }",
+    "",
+    `  static func search(matching query: String) -> [${entityTypeName}] {`,
+    "    let all = records",
+    "",
+    "    if query.isEmpty {",
+    `      return all.map { ${entityTypeName}(id: $0.id) }`,
+    "    }",
+    "",
+    "    let normalizedQuery = query.lowercased()",
+    "",
+    "    return all",
+    "      .filter { $0.searchText.lowercased().contains(normalizedQuery) }",
+    `      .map { ${entityTypeName}(id: $0.id) }`,
+    "  }",
+    "}",
+    "",
+  );
+
+  if (entity.spotlight) {
+    lines.push(
+      "@available(iOS 18.0, *)",
+      `extension ${entityCatalogTypeName} {`,
+      "  static func syncSpotlight(rebuild: Bool) async throws {",
+      "    let defaults = reactNativeAppIntentsUserDefaults()",
+      "    let index = CSSearchableIndex.default()",
+      "    let visible = records.filter { !$0.hideInSpotlight }",
+      "    let previous = rebuild ? [:] : (defaults.dictionary(forKey: indexedKey) as? [String: String] ?? [:])",
+      "",
+      "    if rebuild {",
+      `      try await index.deleteAppEntities(ofType: ${entityTypeName}.self)`,
+      "    }",
+      "",
+      "    let current = Dictionary(visible.map { ($0.id, $0.fingerprint) }, uniquingKeysWith: { first, _ in first })",
+      "    let removed = previous.keys.filter { current[$0] == nil }",
+      "",
+      "    if !removed.isEmpty {",
+      `      try await index.deleteAppEntities(identifiedBy: Array(removed), ofType: ${entityTypeName}.self)`,
+      "    }",
+      "",
+      "    let changed = visible.filter { previous[$0.id] != $0.fingerprint }",
+      "",
+      "    if !changed.isEmpty {",
+      `      try await index.indexAppEntities(changed.map { ${entityTypeName}(id: $0.id) }, priority: 0)`,
+      "    }",
+      "",
+      "    defaults.set(current, forKey: indexedKey)",
+      "  }",
+      "}",
+      "",
+    );
+  }
+
+  lines.push(
+    "@available(iOS 16.0, *)",
+    `struct ${entityQueryTypeName}: EntityQuery, EntityStringQuery {`,
+    `  func entities(for identifiers: [String]) async throws -> [${entityTypeName}] {`,
+    `    ${entityCatalogTypeName}.entities(for: identifiers)`,
+    "  }",
+    "",
+    `  func suggestedEntities() async throws -> [${entityTypeName}] {`,
+    `    ${entityCatalogTypeName}.search(matching: "")`,
+    "  }",
+    "",
+    `  func entities(matching string: String) async throws -> [${entityTypeName}] {`,
+    `    ${entityCatalogTypeName}.search(matching: string)`,
+    "  }",
+    "}",
+    "",
+  );
+
+  return lines.join("\n");
+}
+
+function renderSwiftCatalogHelpers(): string {
+  return [
+    "private struct ReactNativeAppIntentsCatalogEntry {",
+    "  let id: String",
+    "  let title: String",
+    "  let subtitle: String?",
+    "  let synonyms: [String]",
+    "  let jsonValue: String",
+    "  let hideInSpotlight: Bool",
+    "  let fingerprint: String",
+    "}",
+    "",
+    "private func reactNativeAppIntentsCatalogEntries(forKey key: String) -> [ReactNativeAppIntentsCatalogEntry]? {",
+    "  guard",
+    "    let json = reactNativeAppIntentsUserDefaults().string(forKey: key),",
+    "    let items = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]",
+    "  else {",
+    "    return nil",
+    "  }",
+    "",
+    "  return items.compactMap { item in",
+    "    guard",
+    '      let id = item["id"] as? String, !id.isEmpty,',
+    '      let title = item["title"] as? String,',
+    '      let value = item["value"],',
+    "      let valueData = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),",
+    "      let itemData = try? JSONSerialization.data(withJSONObject: item, options: [.sortedKeys])",
+    "    else {",
+    "      return nil",
+    "    }",
+    "",
+    "    return ReactNativeAppIntentsCatalogEntry(",
+    "      id: id,",
+    "      title: title,",
+    '      subtitle: item["subtitle"] as? String,',
+    '      synonyms: (item["synonyms"] as? [String]) ?? [],',
+    "      jsonValue: String(decoding: valueData, as: UTF8.self),",
+    '      hideInSpotlight: (item["hideInSpotlight"] as? Bool) ?? false,',
+    "      fingerprint: String(decoding: itemData, as: UTF8.self)",
+    "    )",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function renderSwiftBridge(
+  entityMetadata: readonly NormalizedEntityMetadata[],
+  providerName: string,
+): string {
+  const spotlightEntities = entityMetadata.filter((entity) => entity.spotlight);
+  const hasSpotlight = spotlightEntities.length > 0;
+  const lines: string[] = [];
+
+  if (hasSpotlight) {
+    lines.push(
+      "@available(iOS 18.0, *)",
+      "private final class ReactNativeAppIntentsIndexDelegate: NSObject, CSSearchableIndexDelegate {",
+      "  static let shared = ReactNativeAppIntentsIndexDelegate()",
+      "",
+      "  static func install() {",
+      "    CSSearchableIndex.default().indexDelegate = shared",
+      "  }",
+      "",
+      "  func searchableIndex(",
+      "    _ searchableIndex: CSSearchableIndex,",
+      "    reindexAllSearchableItemsWithAcknowledgementHandler acknowledgementHandler: @escaping () -> Void",
+      "  ) {",
+      "    Task {",
+      "      try? await ReactNativeAppIntentsGeneratedBridge.syncCatalog(entityId: nil, rebuild: true)",
+      "      acknowledgementHandler()",
+      "    }",
+      "  }",
+      "",
+      "  func searchableIndex(",
+      "    _ searchableIndex: CSSearchableIndex,",
+      "    reindexSearchableItemsWithIdentifiers identifiers: [String],",
+      "    acknowledgementHandler: @escaping () -> Void",
+      "  ) {",
+      "    Task {",
+      "      try? await ReactNativeAppIntentsGeneratedBridge.syncCatalog(entityId: nil, rebuild: true)",
+      "      acknowledgementHandler()",
+      "    }",
+      "  }",
+      "}",
+      "",
+    );
+  }
+
+  lines.push(
+    "@available(iOS 16.0, *)",
+    "private func reactNativeAppIntentsEntityIdentifier(_ entityId: String, _ id: String) -> EntityIdentifier? {",
+    "  switch entityId {",
+    ...entityMetadata.flatMap((entity) => [
+      `  case "${escapeSwiftString(entity.id)}":`,
+      `    return EntityIdentifier(for: ${getSwiftEntityTypeName(entity.id)}.self, identifier: id)`,
+    ]),
+    "  default:",
+    "    return nil",
+    "  }",
+    "}",
+    "",
+    "@objc(ReactNativeAppIntentsGeneratedBridge)",
+    "final class ReactNativeAppIntentsGeneratedBridge: NSObject {",
+    "  @objc static func catalogDidChange(_ entityId: String, completion: @escaping (NSError?) -> Void) {",
+    "    Task {",
+    "      do {",
+    "        try await syncCatalog(entityId: entityId, rebuild: false)",
+    "        completion(nil)",
+    "      } catch {",
+    "        completion(error as NSError)",
+    "      }",
+    "    }",
+    "  }",
+    "",
+    "  @objc static func reindex(_ entityId: String?, completion: @escaping (NSError?) -> Void) {",
+    "    Task {",
+    "      do {",
+    "        try await syncCatalog(entityId: entityId, rebuild: true)",
+    "        completion(nil)",
+    "      } catch {",
+    "        completion(error as NSError)",
+    "      }",
+    "    }",
+    "  }",
+    "",
+    "  fileprivate static func syncCatalog(entityId: String?, rebuild: Bool) async throws {",
+  );
+
+  if (hasSpotlight) {
+    lines.push(
+      "    if #available(iOS 18.0, *) {",
+      "      ReactNativeAppIntentsIndexDelegate.install()",
+      "",
+      "      for id in [" +
+        spotlightEntities.map((entity) => `"${escapeSwiftString(entity.id)}"`).join(", ") +
+        "] where entityId == nil || entityId == id {",
+      "        switch id {",
+      ...spotlightEntities.flatMap((entity) => [
+        `        case "${escapeSwiftString(entity.id)}":`,
+        `          try await ${getSwiftEntityCatalogTypeName(entity.id)}.syncSpotlight(rebuild: rebuild)`,
+      ]),
+      "        default:",
+      "          break",
+      "        }",
+      "      }",
+      "    }",
+      "",
+    );
+  }
+
+  lines.push(
+    "    if #available(iOS 16.0, *) {",
+    `      ${providerName}.updateAppShortcutParameters()`,
+    "    }",
+    "  }",
+    "",
+    "  @objc static func setOnscreenEntity(_ entityId: String?, id: String?) {",
+    "    DispatchQueue.main.async {",
+    "      guard #available(iOS 18.2, *) else {",
+    "        return",
+    "      }",
+    "",
+    "      let root = UIApplication.shared.connectedScenes",
+    "        .compactMap { $0 as? UIWindowScene }",
+    "        .flatMap { $0.windows }",
+    "        .first { $0.isKeyWindow }?",
+    "        .rootViewController",
+    "",
+    "      guard let root else {",
+    "        return",
+    "      }",
+    "",
+    "      if let entityId, let id, let identifier = reactNativeAppIntentsEntityIdentifier(entityId, id) {",
+    '        let activity = NSUserActivity(activityType: "ReactNativeAppIntents.onscreenEntity")',
+    "        activity.appEntityIdentifier = identifier",
+    "        root.userActivity = activity",
+    "        activity.becomeCurrent()",
+    "      } else if let activity = root.userActivity {",
+    "        activity.appEntityIdentifier = nil",
+    "        activity.resignCurrent()",
+    "        root.userActivity = nil",
+    "      }",
+    "    }",
+    "  }",
+    "",
+    "  @objc static func setEntityIdentifier(on view: UIView, entityId: String?, id: String?) {",
+    "    DispatchQueue.main.async {",
+    "      guard #available(iOS 18.4, *) else {",
+    "        return",
+    "      }",
+    "",
+    "      if let entityId, let id {",
+    "        view.appEntityIdentifier = reactNativeAppIntentsEntityIdentifier(entityId, id)",
+    "      } else {",
+    "        view.appEntityIdentifier = nil",
+    "      }",
+    "    }",
+    "  }",
+    "}",
+    "",
+  );
+
+  return lines.join("\n");
+}
+
 function renderSwiftJSONValueExpression(
   valueExpression: string,
   definition: SwiftLeafParameterDefinition,
@@ -954,9 +1386,17 @@ function renderSwift(
   appGroupIdentifier?: string,
 ): string {
   const entitiesById = new Map(entityMetadata.map((entity) => [entity.id, entity]));
+  const needsBridge = entityMetadata.some((entity) => entity.catalog === "runtime");
+  const openIntentEntities = new Map(
+    entityMetadata.flatMap((entity) =>
+      entity.spotlight ? [[entity.spotlight.openIntentId, entity.id] as const] : [],
+    ),
+  );
   const declarations: string[] = [
     "import AppIntents",
+    ...(needsBridge ? ["import CoreSpotlight"] : []),
     "import Foundation",
+    ...(needsBridge ? ["import UIKit"] : []),
     "",
     'private let reactNativeAppIntentsAppGroupInfoKey = "ReactNativeAppIntentsAppGroupIdentifier"',
     `private let reactNativeAppIntentsAppGroupIdentifier: String? = ${
@@ -1013,16 +1453,39 @@ function renderSwift(
     "",
   ];
 
+  if (needsBridge) {
+    declarations.push(renderSwiftCatalogHelpers());
+  }
+
   for (const entity of entityMetadata) {
-    declarations.push(renderSwiftEntity(entity));
+    declarations.push(
+      entity.catalog === "runtime" ? renderSwiftRuntimeEntity(entity) : renderSwiftEntity(entity),
+    );
   }
 
   for (const intent of intentMetadata) {
     const typeName = `${toPascalCase(intent.id)}Intent`;
+    const openTargetEntityId = openIntentEntities.get(intent.id);
     const renderableParameters = collectSwiftRenderableParameters(
       Object.entries(intent.intent.params) as [string, AnyParameterDefinition][],
       new Set<string>(),
+    ).map((parameter) =>
+      openTargetEntityId !== undefined &&
+      parameter.path.length === 1 &&
+      parameter.definition.kind === "entity" &&
+      parameter.definition.entity.id === openTargetEntityId
+        ? { ...parameter, declarationName: "target" }
+        : parameter,
     );
+
+    if (
+      openTargetEntityId !== undefined &&
+      renderableParameters.filter((parameter) => parameter.declarationName === "target").length > 1
+    ) {
+      throw new Error(
+        `Spotlight open intent "${intent.id}" cannot also declare a parameter named "target".`,
+      );
+    }
     const parameters = renderableParameters.map((parameter) =>
       renderSwiftParameter(parameter, entitiesById),
     );
@@ -1053,7 +1516,7 @@ function renderSwift(
 
     declarations.push(
       "@available(iOS 16.0, *)",
-      `struct ${typeName}: AppIntent {`,
+      `struct ${typeName}: AppIntent${openTargetEntityId !== undefined ? ", OpenIntent" : ""} {`,
       `  static let title: LocalizedStringResource = "${escapeSwiftString(intent.title)}"`,
       intent.description
         ? `  static let description = IntentDescription("${escapeSwiftString(intent.description)}")`
@@ -1098,9 +1561,20 @@ function renderSwift(
       const parametersByName = new Map(
         intent.params.map((parameter) => [parameter.name, parameter]),
       );
+      const openTargetEntityId = openIntentEntities.get(intent.id);
+      const swiftNames = new Map(
+        intent.params.flatMap((parameter) =>
+          openTargetEntityId !== undefined && parameter.entityId === openTargetEntityId
+            ? [[parameter.name, "target"] as const]
+            : [],
+        ),
+      );
       const phrases = [
         ...new Set(intent.phrases.map((phrase) => phrase.swiftAppShortcutPhrase)),
-      ].map((phrase) => `          "${toSwiftAppShortcutPhrase(phrase, parametersByName)}",`);
+      ].map(
+        (phrase) =>
+          `          "${toSwiftAppShortcutPhrase(phrase, parametersByName, swiftNames)}",`,
+      );
       const shortcutIconSystemName = intent.appShortcut.iconSystemName ?? "square.grid.2x2";
 
       return [
@@ -1126,6 +1600,10 @@ function renderSwift(
     "}",
     "",
   );
+
+  if (needsBridge) {
+    declarations.push(renderSwiftBridge(entityMetadata, providerName));
+  }
 
   return declarations.join("\n");
 }
