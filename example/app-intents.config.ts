@@ -14,6 +14,11 @@ export default defineAppIntentsConfig({
     manifest: "../apps/example-bare/android/app/src/main/AndroidManifest.xml",
     shortcutsOutput: "../apps/example-bare/android/app/src/main/res/xml/app_shortcuts.xml",
     packageName: "com.avasapp.appintents.example",
+    appFunctions: {
+      output:
+        "../apps/example-bare/android/app/src/main/java/com/avasapp/appintents/example/appfunctions/AppIntentsAppFunctions.kt",
+      appMetadata: { instructions: "Look up and open orders in the App Intents example." },
+    },
   },
   types: { output: "src/generated/app-intents.d.ts" },
 });

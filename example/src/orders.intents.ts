@@ -10,6 +10,7 @@ export const Order = defineEntity({
     customer: p.string(),
   }),
   spotlight: { openIntent: "openSavedOrder" },
+  android: { appFunctionQuery: true },
   title: "Order",
   identifier: (order) => String(order.id),
   displayRepresentation: (order) => ({
@@ -89,6 +90,7 @@ export const openSavedOrder = defineIntent({
     appAction: {
       capability: "actions.intent.GET_ORDER",
     },
+    appFunction: true,
   },
   ios: {
     appIntent: {},
