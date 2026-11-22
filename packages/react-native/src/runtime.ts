@@ -133,6 +133,43 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
   const isIntentHostUrl = (url: string | null | undefined): boolean =>
     typeof url === "string" && /^[^:/?#]+:\/\/app-intents(?:[/?#]|$)/.test(url);
 
+  const stripInvocationId = (url: string): string =>
+    url.replace(/([?&])invocationId=[^&#]*&?/, "$1").replace(/[?&]$/, "");
+  // Native stores a recorded url before React forwards it to Linking, so a matching pending run means this Linking url is a copy.
+  // Native may already have delivered and acked the run, so also remember what it delivered.
+  const recentNativeUrls = new Map<string, number>();
+  const NATIVE_COPY_WINDOW_MS = 5000;
+  const noteNativeUrl = (url: string): void => {
+    const now = Date.now();
+
+    for (const [key, at] of recentNativeUrls) {
+      if (now - at > NATIVE_COPY_WINDOW_MS) {
+        recentNativeUrls.delete(key);
+      }
+    }
+
+    recentNativeUrls.set(stripInvocationId(url), now);
+  };
+  const hasNativeCopy = async (url: string): Promise<boolean> => {
+    if (!nativeOwnsIntents || !isIntentHostUrl(url) || url.includes("invocationId=")) {
+      return false;
+    }
+
+    const seenAt = recentNativeUrls.get(url);
+
+    if (seenAt !== undefined && Date.now() - seenAt <= NATIVE_COPY_WINDOW_MS) {
+      return true;
+    }
+
+    try {
+      const pending = (await nativeModule?.getPendingIntentURLs?.()) ?? [];
+
+      return pending.some((nativeUrl) => stripInvocationId(nativeUrl) === url);
+    } catch {
+      return false;
+    }
+  };
+
   // An old module pops one run per read; keep the first so getInitialURL and the listener both see it.
   let oldModuleInitialUrl: Promise<string | null> | null = null;
   const readOldModuleInitialUrl = (): Promise<string | null> => {
@@ -149,6 +186,7 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
         try {
           if (nativeModule?.getPendingIntentURLs) {
             for (const url of await nativeModule.getPendingIntentURLs()) {
+              noteNativeUrl(url);
               listener({ url });
             }
           } else if (nativeModule?.getInitialIntentURL) {
@@ -170,7 +208,12 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       };
 
       if (nativeEmitter) {
-        subscriptions.push(nativeEmitter.addListener("appIntentUrl", listener));
+        subscriptions.push(
+          nativeEmitter.addListener("appIntentUrl", (event) => {
+            noteNativeUrl(event.url);
+            listener(event);
+          }),
+        );
       }
 
       subscriptions.push(
@@ -183,6 +226,15 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       subscriptions.push(
         reactNative.Linking.addEventListener("url", (event) => {
           if (dropLinkingIntentUrls && isIntentHostUrl(event.url)) {
+            return;
+          }
+
+          if (nativeOwnsIntents && isIntentHostUrl(event.url)) {
+            void hasNativeCopy(event.url).then((isCopy) => {
+              if (!isCopy) {
+                listener(event);
+              }
+            });
             return;
           }
 
@@ -201,7 +253,13 @@ function getDefaultLinking(providedNativeModule?: AppIntentsNativeModule): Linki
       if (nativeOwnsIntents) {
         const linkingUrl = await reactNative.Linking.getInitialURL();
 
-        return dropLinkingIntentUrls && isIntentHostUrl(linkingUrl) ? null : linkingUrl;
+        if (!isIntentHostUrl(linkingUrl)) {
+          return linkingUrl;
+        }
+
+        return dropLinkingIntentUrls || (await hasNativeCopy(linkingUrl as string))
+          ? null
+          : linkingUrl;
       }
 
       if (nativeModule?.getInitialIntentURL) {

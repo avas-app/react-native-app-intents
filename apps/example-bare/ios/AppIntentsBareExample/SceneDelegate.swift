@@ -17,6 +17,12 @@ class SceneDelegate: RCTDefaultReactNativeFactoryDelegate, UIWindowSceneDelegate
       return
     }
 
+    recordAppIntentsURLs(in: connectionOptions.urlContexts)
+
+    if let shortcutItem = connectionOptions.shortcutItem {
+      _ = handleShortcutItem(shortcutItem)
+    }
+
     dependencyProvider = RCTAppDependencyProvider()
     reactNativeFactory = RCTReactNativeFactory(delegate: self)
     window = UIWindow(windowScene: windowScene)
@@ -37,10 +43,31 @@ class SceneDelegate: RCTDefaultReactNativeFactoryDelegate, UIWindowSceneDelegate
   }
 
   func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    for context in URLContexts where context.url.host == "app-intents" {
+    recordAppIntentsURLs(in: URLContexts)
+    RCTLinkingManager.scene(scene, openURLContexts: URLContexts)
+  }
+
+  func windowScene(
+    _ windowScene: UIWindowScene,
+    performActionFor shortcutItem: UIApplicationShortcutItem,
+    completionHandler: @escaping (Bool) -> Void
+  ) {
+    completionHandler(handleShortcutItem(shortcutItem))
+  }
+
+  private func recordAppIntentsURLs(in contexts: Set<UIOpenURLContext>) {
+    for context in contexts where context.url.host == "app-intents" {
       ReactNativeAppIntents.recordIncomingURLString(context.url.absoluteString)
     }
-    RCTLinkingManager.scene(scene, openURLContexts: URLContexts)
+  }
+
+  private func handleShortcutItem(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+    guard let url = shortcutItem.userInfo?["url"] as? String else {
+      return false
+    }
+
+    ReactNativeAppIntents.recordIncomingURLString(url)
+    return true
   }
 
   func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
