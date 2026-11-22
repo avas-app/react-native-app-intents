@@ -4,9 +4,9 @@ import {
   type LinkingAdapter,
 } from "@avasapp/react-native-app-intents";
 
-import { openOrder, openSavedOrder } from "./orders.intents.js";
+import { Order, openOrder, openSavedOrder } from "./orders.intents.js";
 
-export { openOrder, openSavedOrder };
+export { Order, openOrder, openSavedOrder };
 
 export const exampleIntents = [openOrder, openSavedOrder] as const;
 const INITIAL_NATIVE_URL_POLL_ATTEMPTS = 240;

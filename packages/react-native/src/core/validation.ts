@@ -1,5 +1,10 @@
 import { ANDROID_APP_ACTION_CATALOG } from "./android-app-actions.js";
-import type { EntityDefinition, EntityDisplayRepresentation, EntityShape } from "./entity.js";
+import type {
+  EntityDefinition,
+  EntityDisplayRepresentation,
+  EntityShape,
+  EntitySpotlightOptions,
+} from "./entity.js";
 import type { AnyParameterDefinition, LocalizedText, ObjectParameterDefinition } from "./schema.js";
 import type {
   AndroidAppActionFulfillment,
@@ -61,10 +66,12 @@ export interface NormalizedEntityInventoryItem<
 export interface NormalizedEntityMetadata<
   TEntity extends EntityDefinition<any> = EntityDefinition<any>,
 > {
+  catalog: "static" | "runtime";
   entity: TEntity;
   id: string;
   inventory: readonly NormalizedEntityInventoryItem<TEntity>[];
   schema: TEntity["schema"];
+  spotlight?: { openIntentId: string };
   title: string;
 }
 
@@ -220,6 +227,83 @@ function serializeObjectParameterValue(
   }
 
   return serialized;
+}
+
+/**
+ * Checks a value against a parameter definition and returns the first problem, or `null` when it
+ * matches. Used for runtime entity catalog entries before they are stored.
+ */
+export function validateParameterValue(
+  definition: AnyParameterDefinition,
+  value: unknown,
+  path: string,
+): string | null {
+  if (value === undefined || value === null) {
+    return definition.optional === true ? null : `field "${path}" is required`;
+  }
+
+  switch (definition.kind) {
+    case "string":
+      return typeof value === "string" ? null : `field "${path}" must be a string`;
+    case "int":
+      return typeof value === "number" && Number.isInteger(value)
+        ? null
+        : `field "${path}" must be an integer`;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+        ? null
+        : `field "${path}" must be a number`;
+    case "bool":
+      return typeof value === "boolean" ? null : `field "${path}" must be a boolean`;
+    case "date":
+      return value instanceof Date && !Number.isNaN(value.getTime())
+        ? null
+        : `field "${path}" must be a Date`;
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return `field "${path}" must be an object`;
+      }
+
+      for (const [key, field] of Object.entries(definition.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        const issue = validateParameterValue(
+          field,
+          (value as Record<string, unknown>)[key],
+          `${path}.${key}`,
+        );
+
+        if (issue) {
+          return issue;
+        }
+      }
+
+      return null;
+    }
+    case "entity": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return `field "${path}" must be an object`;
+      }
+
+      for (const [key, field] of Object.entries(definition.entity.schema.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        const issue = validateParameterValue(
+          field,
+          (value as Record<string, unknown>)[key],
+          `${path}.${key}`,
+        );
+
+        if (issue) {
+          return issue;
+        }
+      }
+
+      return null;
+    }
+  }
 }
 
 function normalizeParameterMetadata(
@@ -584,6 +668,18 @@ export function resolveLocalizedText(
   return typeof firstEntry === "string" ? firstEntry : fallback;
 }
 
+function resolveSpotlightOpenIntentId(spotlight: EntitySpotlightOptions): string | undefined {
+  try {
+    const target =
+      typeof spotlight.openIntent === "function" ? spotlight.openIntent() : spotlight.openIntent;
+    const id = typeof target === "string" ? target : target?.id;
+
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>(
   entity: TEntity,
 ): NormalizedEntityMetadata<TEntity> {
@@ -635,15 +731,45 @@ export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>
     },
   );
 
+  const catalog = entity.catalog ?? "static";
+
+  if (catalog !== "static" && catalog !== "runtime") {
+    appendIssue(
+      issues,
+      entity.id,
+      `catalog must be "static" or "runtime", got "${String(catalog)}".`,
+    );
+  }
+
+  const openIntentId = entity.spotlight
+    ? resolveSpotlightOpenIntentId(entity.spotlight)
+    : undefined;
+
+  if (entity.spotlight) {
+    if (!openIntentId) {
+      appendIssue(
+        issues,
+        entity.id,
+        "spotlight.openIntent must be an intent id, an intent from defineIntent(), or a function returning one.",
+      );
+    }
+
+    if (catalog !== "runtime") {
+      appendIssue(issues, entity.id, 'spotlight requires catalog: "runtime".');
+    }
+  }
+
   if (issues.length > 0) {
     throw new AppIntentsValidationError(issues);
   }
 
   return {
+    catalog,
     entity,
     id: entity.id,
     inventory,
     schema: entity.schema,
+    ...(openIntentId ? { spotlight: { openIntentId } } : {}),
     title: resolveLocalizedText(entity.title, entity.id) ?? entity.id,
   };
 }
@@ -850,5 +976,41 @@ export function normalizeReferencedEntities<TIntents extends readonly IntentDefi
     throw new AppIntentsValidationError(issues);
   }
 
-  return [...entitiesById.values()].map((entity) => normalizeEntityDefinition(entity));
+  const normalized = [...entitiesById.values()].map((entity) => normalizeEntityDefinition(entity));
+  const spotlightIssues: string[] = [];
+
+  for (const entity of normalized) {
+    if (!entity.spotlight) {
+      continue;
+    }
+
+    const openIntent = intents.find((intent) => intent.id === entity.spotlight?.openIntentId);
+
+    if (!openIntent) {
+      appendIssue(
+        spotlightIssues,
+        entity.id,
+        `spotlight.openIntent "${entity.spotlight.openIntentId}" is not one of the configured intents.`,
+      );
+      continue;
+    }
+
+    const entityParams = Object.values(
+      openIntent.params as Record<string, AnyParameterDefinition>,
+    ).filter((definition) => definition.kind === "entity" && definition.entity.id === entity.id);
+
+    if (entityParams.length !== 1 || entityParams[0]?.optional === true) {
+      appendIssue(
+        spotlightIssues,
+        entity.id,
+        `spotlight.openIntent "${openIntent.id}" must take exactly one required parameter of this entity.`,
+      );
+    }
+  }
+
+  if (spotlightIssues.length > 0) {
+    throw new AppIntentsValidationError(spotlightIssues);
+  }
+
+  return normalized;
 }
