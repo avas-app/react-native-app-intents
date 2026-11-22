@@ -34,6 +34,12 @@ export interface EntitySpotlightOptions {
   openIntent: IntentDefinition<any> | (() => IntentDefinition<any>) | string;
 }
 
+/** Android-specific options for an entity. */
+export interface EntityAndroidOptions {
+  /** Emits a generated `find<Entity>s(query: String?)` AppFunction that reads the entity's runtime catalog. Requires `catalog: "runtime"` or a static `inventory`. */
+  appFunctionQuery?: boolean;
+}
+
 /** Input passed to an entity query callback. */
 export interface EntityQueryInput {
   /** Free-text search text provided by the native resolver. */
@@ -76,6 +82,8 @@ export interface EntityDefinition<
   catalog?: EntityCatalogMode;
   /** iOS 18+: index this entity in Spotlight and run `openIntent` when a result is tapped. Requires `catalog: "runtime"`. `openIntent` must be one of the configured intents and take exactly one parameter of this entity. */
   spotlight?: EntitySpotlightOptions;
+  /** Android-specific generation options. */
+  android?: EntityAndroidOptions;
   /** Optional runtime query used to resolve entities by search text or identifier. Define this when iOS App Intents / Siri should be able to search live data instead of relying purely on `inventory`; omit it for fully static catalogs. */
   query?: (
     input: EntityQueryInput,

@@ -66,6 +66,7 @@ export interface NormalizedEntityInventoryItem<
 export interface NormalizedEntityMetadata<
   TEntity extends EntityDefinition<any> = EntityDefinition<any>,
 > {
+  appFunctionQuery: boolean;
   catalog: "static" | "runtime";
   entity: TEntity;
   id: string;
@@ -109,8 +110,14 @@ export interface NormalizedAndroidAppActionMetadata {
   inventoryStrategy: AndroidAppActionInventoryStrategy;
 }
 
+export interface NormalizedAndroidAppFunctionMetadata {
+  enabledByDefault: boolean;
+  result: "delivered";
+}
+
 export interface NormalizedAndroidIntentMetadata {
   appAction?: NormalizedAndroidAppActionMetadata;
+  appFunction?: NormalizedAndroidAppFunctionMetadata;
 }
 
 export interface NormalizedIOSAppIntentResponseMetadata {
@@ -450,32 +457,174 @@ function normalizeSurfaces(surfaces: IntentSurfaces | undefined): NormalizedInte
   };
 }
 
+const KOTLIN_HARD_KEYWORDS = new Set([
+  "as",
+  "break",
+  "class",
+  "continue",
+  "do",
+  "else",
+  "false",
+  "for",
+  "fun",
+  "if",
+  "in",
+  "interface",
+  "is",
+  "null",
+  "object",
+  "package",
+  "return",
+  "super",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typealias",
+  "typeof",
+  "val",
+  "var",
+  "when",
+  "while",
+]);
+
+const KOTLIN_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isKotlinSafeName(name: string): boolean {
+  return KOTLIN_IDENTIFIER_PATTERN.test(name) && !KOTLIN_HARD_KEYWORDS.has(name);
+}
+
+function validateAndroidAppFunctionParameter(
+  definition: AnyParameterDefinition,
+  scopeId: string,
+  path: string,
+  issues: string[],
+): void {
+  switch (definition.kind) {
+    case "string":
+    case "int":
+    case "number":
+    case "bool":
+    case "date":
+      return;
+    case "object":
+      for (const [fieldName, field] of Object.entries(definition.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        if (!isKotlinSafeName(fieldName)) {
+          appendIssue(
+            issues,
+            scopeId,
+            `Field "${path}.${fieldName}" is not a Kotlin-safe name for AppFunction codegen (reserved keyword or invalid identifier).`,
+          );
+        }
+
+        validateAndroidAppFunctionParameter(field, scopeId, `${path}.${fieldName}`, issues);
+      }
+
+      return;
+    case "entity":
+      for (const [fieldName, field] of Object.entries(definition.entity.schema.fields) as [
+        string,
+        AnyParameterDefinition,
+      ][]) {
+        if (!isKotlinSafeName(fieldName)) {
+          appendIssue(
+            issues,
+            definition.entity.id,
+            `Entity field "${fieldName}" is not a Kotlin-safe name for AppFunction codegen (reserved keyword or invalid identifier).`,
+          );
+        }
+
+        validateAndroidAppFunctionParameter(field, definition.entity.id, fieldName, issues);
+      }
+
+      return;
+    default:
+      appendIssue(
+        issues,
+        scopeId,
+        `Parameter "${path}" has a type AppFunction codegen does not support.`,
+      );
+  }
+}
+
+function validateAndroidAppFunctionNames(
+  scopeId: string,
+  intent: IntentDefinition<any>,
+  issues: string[],
+): void {
+  if (!isKotlinSafeName(intent.id)) {
+    appendIssue(
+      issues,
+      scopeId,
+      `Intent id "${intent.id}" is not a Kotlin-safe function name for AppFunction codegen.`,
+    );
+  }
+
+  for (const [name, definition] of Object.entries(intent.params) as [
+    string,
+    AnyParameterDefinition,
+  ][]) {
+    if (!isKotlinSafeName(name)) {
+      appendIssue(
+        issues,
+        scopeId,
+        `Parameter "${name}" is not a Kotlin-safe name for AppFunction codegen (reserved keyword or invalid identifier).`,
+      );
+    }
+
+    validateAndroidAppFunctionParameter(definition, scopeId, name, issues);
+  }
+}
+
 function normalizeAndroidMetadata(
   intent: IntentDefinition<any>,
   issues: string[],
 ): NormalizedAndroidIntentMetadata | undefined {
   const appAction = intent.android?.appAction;
+  const appFunctionOption = intent.android?.appFunction;
   const capabilityName = appAction?.capability ?? intent.androidBii;
+  const metadata: NormalizedAndroidIntentMetadata = {};
 
-  if (!capabilityName) {
-    if (intent.surfaces?.assistant) {
-      appendIssue(
-        issues,
-        intent.id,
-        "surfaces.assistant no longer enables Android App Actions by itself. Configure android.appAction.",
-      );
-    }
-
-    return undefined;
-  }
-
-  return {
-    appAction: {
+  if (capabilityName) {
+    metadata.appAction = {
       capabilityName,
       fulfillment: appAction?.fulfillment ?? "deeplink",
       inventoryStrategy: appAction?.inventory?.strategy ?? "static",
-    },
-  };
+    };
+  } else if (intent.surfaces?.assistant) {
+    appendIssue(
+      issues,
+      intent.id,
+      "surfaces.assistant no longer enables Android App Actions by itself. Configure android.appAction.",
+    );
+  }
+
+  if (appFunctionOption !== undefined && appFunctionOption !== false) {
+    const options = typeof appFunctionOption === "object" ? appFunctionOption : {};
+
+    if (options.enabledByDefault !== undefined && typeof options.enabledByDefault !== "boolean") {
+      appendIssue(issues, intent.id, "android.appFunction.enabledByDefault must be a boolean.");
+    }
+
+    if (options.result !== undefined && options.result !== "delivered") {
+      appendIssue(
+        issues,
+        intent.id,
+        `android.appFunction.result must be "delivered", got "${String(options.result)}".`,
+      );
+    }
+
+    metadata.appFunction = {
+      enabledByDefault: options.enabledByDefault !== false,
+      result: "delivered",
+    };
+    validateAndroidAppFunctionNames(intent.id, intent, issues);
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 function normalizeIOSResponseMetadata(
@@ -759,11 +908,39 @@ export function normalizeEntityDefinition<TEntity extends EntityDefinition<any>>
     }
   }
 
+  const appFunctionQuery = entity.android?.appFunctionQuery === true;
+
+  if (appFunctionQuery) {
+    if (catalog !== "runtime" && (!entity.inventory || entity.inventory.length === 0)) {
+      appendIssue(
+        issues,
+        entity.id,
+        'android.appFunctionQuery requires catalog: "runtime" or a static inventory.',
+      );
+    }
+
+    for (const [fieldName, field] of Object.entries(entity.schema.fields) as [
+      string,
+      AnyParameterDefinition,
+    ][]) {
+      if (!isKotlinSafeName(fieldName)) {
+        appendIssue(
+          issues,
+          entity.id,
+          `Entity field "${fieldName}" is not a Kotlin-safe name for AppFunction codegen (reserved keyword or invalid identifier).`,
+        );
+      }
+
+      validateAndroidAppFunctionParameter(field, entity.id, fieldName, issues);
+    }
+  }
+
   if (issues.length > 0) {
     throw new AppIntentsValidationError(issues);
   }
 
   return {
+    appFunctionQuery,
     catalog,
     entity,
     id: entity.id,
