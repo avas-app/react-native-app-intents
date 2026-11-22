@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -131,6 +132,46 @@ class ReactNativeAppIntentsModule(
     }
     promise.resolve(null)
   }
+
+  @ReactMethod
+  fun setEntityCatalog(entityId: String, json: String, promise: Promise) {
+    preferences.edit().putString(catalogKey(entityId), json).apply()
+    promise.resolve(null)
+  }
+
+  @ReactMethod
+  fun getEntityCatalog(entityId: String, promise: Promise) {
+    promise.resolve(preferences.getString(catalogKey(entityId), null))
+  }
+
+  @ReactMethod
+  fun setAppFunctionEnabled(intentId: String, enabled: Boolean, promise: Promise) {
+    if (Build.VERSION.SDK_INT < 36) {
+      promise.resolve(null)
+      return
+    }
+
+    try {
+      val bridge = try {
+        Class.forName("${reactApplicationContext.packageName}.appfunctions.ReactNativeAppIntentsAppFunctionsBridge")
+      } catch (_: ClassNotFoundException) {
+        promise.resolve(null)
+        return
+      }
+      val method = bridge.getMethod(
+        "setEnabled",
+        Context::class.java,
+        String::class.java,
+        Boolean::class.javaPrimitiveType,
+      )
+      method.invoke(null, reactApplicationContext, intentId, enabled)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("set_app_function_enabled_failed", "Failed to update the AppFunction.", error)
+    }
+  }
+
+  private fun catalogKey(entityId: String) = "$CATALOG_KEY_PREFIX$entityId"
 
   @ReactMethod
   fun updateDynamicShortcuts(shortcuts: ReadableArray, promise: Promise) {
@@ -311,6 +352,7 @@ class ReactNativeAppIntentsModule(
     private const val DONATION_SHORTCUT_PREFIX = "react-native-app-intents-donation"
     private const val DONATION_SHORTCUT_IDS_KEY = "donationShortcutIds"
     private const val DYNAMIC_SHORTCUT_IDS_KEY = "dynamicShortcutIds"
+    private const val CATALOG_KEY_PREFIX = "ReactNativeAppIntentsEntityCatalog."
     private const val PREFERENCES_NAME = "ReactNativeAppIntents"
     private val ANDROID_SHORTCUT_ICON_PATTERN = Regex("^@(drawable|mipmap)/([A-Za-z0-9_]+)$")
     private const val RECORDED_EXTRA = "com.reactnativeappintents.recorded"

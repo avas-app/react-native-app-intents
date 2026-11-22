@@ -474,6 +474,9 @@ export function deserializeIntentParams<TIntent extends IntentDefinition<any>>(
   return parsed as ParamsOf<TIntent>;
 }
 
+// Android AppFunction calls are queued natively, which doesn't know the app's scheme.
+const APP_FUNCTION_URL_SCHEME = "app-intents-function";
+
 interface ParsedIntentUrl {
   host: string;
   pathSegments: string[];
@@ -528,7 +531,10 @@ export function parseIntentUrl<TIntents extends IntentTuple>(
 ): IntentEventUnion<TIntents> | null {
   const parsedUrl = parseCustomSchemeUrl(url);
 
-  if (!parsedUrl || parsedUrl.scheme !== context.scheme) {
+  if (
+    !parsedUrl ||
+    (parsedUrl.scheme !== context.scheme && parsedUrl.scheme !== APP_FUNCTION_URL_SCHEME)
+  ) {
     return null;
   }
 
@@ -816,7 +822,9 @@ export function useAppEntityTag(
       typeof fabricTag === "number"
         ? fabricTag
         : (
-            require("react-native") as { findNodeHandle(instance: unknown): number | null }
+            require("react-native") as {
+              findNodeHandle(instance: unknown): number | null;
+            }
           ).findNodeHandle(target);
 
     if (reactTag === null || reactTag === undefined) {
@@ -850,6 +858,11 @@ export interface AppIntentsRuntime<TIntents extends IntentTuple> {
     entity: TEntity,
   ): Promise<EntityCatalogEntry<TEntity>[]>;
   reindexEntities(entity?: EntityDefinition<any>): Promise<void>;
+  /** Turns an Android AppFunction on or off at runtime. A no-op on iOS, web and below Android 16. */
+  setAppFunctionEnabled<TIntent extends TIntents[number]>(
+    intent: TIntent,
+    enabled: boolean,
+  ): Promise<void>;
   setEntities<TEntity extends EntityDefinition<any>>(
     entity: TEntity,
     entries: readonly EntityCatalogEntry<TEntity>[],
@@ -1100,6 +1113,10 @@ export function createAppIntentsRuntime<const TIntents extends IntentTuple>(
       const stored = await queueCatalogWork(entity.id, () => currentCatalog(entity));
 
       return toPublicEntries(entity, stored) as EntityCatalogEntry<typeof entity>[];
+    },
+
+    async setAppFunctionEnabled(intent, enabled) {
+      await nativeModule.setAppFunctionEnabled?.(intent.id, enabled);
     },
 
     async reindexEntities(entity) {

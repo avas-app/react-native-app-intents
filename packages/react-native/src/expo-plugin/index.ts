@@ -17,12 +17,18 @@ const {
   IOSConfig,
   createRunOncePlugin,
   withDangerousMod,
+  withAppBuildGradle,
   withEntitlementsPlist,
+  withGradleProperties,
   withInfoPlist,
+  withProjectBuildGradle,
   withXcodeProject,
 } =
-  (ExpoConfigPlugins as typeof ExpoConfigPlugins & { default?: typeof ExpoConfigPlugins })
-    .default ?? ExpoConfigPlugins;
+  (
+    ExpoConfigPlugins as typeof ExpoConfigPlugins & {
+      default?: typeof ExpoConfigPlugins;
+    }
+  ).default ?? ExpoConfigPlugins;
 const EXPO_PLUGIN_PACKAGE_NAME = "@avasapp/react-native-app-intents";
 const DEFAULT_CONFIG_FILE_NAMES = [
   "app-intents.config.ts",
@@ -35,6 +41,11 @@ const DEFAULT_CONFIG_FILE_NAMES = [
 const GENERATED_IOS_SOURCE_FILE_NAME = "GeneratedAppIntents.swift";
 const DEFAULT_ANDROID_MANIFEST_PATH = "android/app/src/main/AndroidManifest.xml";
 const DEFAULT_ANDROID_SHORTCUTS_PATH = "android/app/src/main/res/xml/app_intents_shortcuts.xml";
+
+const APP_FUNCTIONS_VERSION = "1.0.0";
+const APP_FUNCTIONS_KSP_VERSION = "2.2.0-2.0.2";
+const APP_FUNCTIONS_COMPILE_SDK = "37";
+const APP_FUNCTIONS_MIN_REACT_NATIVE = [0, 88] as const;
 
 export type ExpoAppIntentsPluginOptions =
   | (Partial<AppIntentsConfigInput> & { configPath?: string })
@@ -449,7 +460,9 @@ export function resolveExpoCodegenConfig(
               ? { appGroupIdentifier: options.ios.appGroupIdentifier }
               : {}),
             ...(options.ios?.appShortcutsProviderName
-              ? { appShortcutsProviderName: options.ios.appShortcutsProviderName }
+              ? {
+                  appShortcutsProviderName: options.ios.appShortcutsProviderName,
+                }
               : {}),
             ...(iosBundleIdentifier ? { bundleIdentifier: iosBundleIdentifier } : {}),
             ...(options.ios?.siriUsageDescription
@@ -465,7 +478,9 @@ export function resolveExpoCodegenConfig(
             packageName: androidPackageName,
             shortcutsOutput: resolveExpoAndroidShortcutsOutput(options),
             ...(options.android?.shortcutsStringsOutput
-              ? { shortcutsStringsOutput: toNativePath(options.android.shortcutsStringsOutput) }
+              ? {
+                  shortcutsStringsOutput: toNativePath(options.android.shortcutsStringsOutput),
+                }
               : {}),
           },
         }
@@ -549,11 +564,16 @@ function withGeneratedIOSSource(
 ): ExpoAppConfig {
   return withXcodeProject(config, async (currentConfig) => {
     const project = currentConfig.modResults as any;
-    const modRequest = currentConfig.modRequest as { projectName?: string; projectRoot: string };
+    const modRequest = currentConfig.modRequest as {
+      projectName?: string;
+      projectRoot: string;
+    };
     const projectName =
       modRequest.projectName ??
       ((
-        IOSConfig.XcodeUtils as unknown as { getProjectName(projectRoot: string): string }
+        IOSConfig.XcodeUtils as unknown as {
+          getProjectName(projectRoot: string): string;
+        }
       ).getProjectName(modRequest.projectRoot) as string);
     const options = await resolveOptions(modRequest.projectRoot);
     const filePath = toIOSProjectRelativePath(resolveExpoIOSOutput(options, projectName));
@@ -569,11 +589,155 @@ function withGeneratedIOSSource(
       const groupName = dirname(filePath);
 
       xcodeUtils.ensureGroupRecursively(project, groupName);
-      xcodeUtils.addBuildSourceFileToGroup({ filepath: filePath, groupName, project });
+      xcodeUtils.addBuildSourceFileToGroup({
+        filepath: filePath,
+        groupName,
+        project,
+      });
     }
 
     return currentConfig;
   });
+}
+
+function usesAppFunctions(options: AppIntentsConfig): boolean {
+  return Boolean((options.android as { appFunctions?: unknown } | undefined)?.appFunctions);
+}
+
+export function applyAppFunctionsProjectGradle(source: string): string {
+  if (source.includes("com.google.devtools.ksp.gradle.plugin")) {
+    return source;
+  }
+
+  const classpath = `        classpath("com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin:${APP_FUNCTIONS_KSP_VERSION}")`;
+  const match = /buildscript\s*\{[\s\S]*?dependencies\s*\{[^\n]*\n/.exec(source);
+
+  if (!match) {
+    throw new Error(
+      "react-native-app-intents could not find buildscript dependencies in android/build.gradle to add the KSP plugin.",
+    );
+  }
+
+  const end = match.index + match[0].length;
+  return `${source.slice(0, end)}${classpath}\n${source.slice(end)}`;
+}
+
+export function applyAppFunctionsAppGradle(source: string): string {
+  let patched = source;
+
+  if (!patched.includes("com.google.devtools.ksp")) {
+    const lastApply = [...patched.matchAll(/^apply plugin: .+$/gm)].at(-1);
+
+    if (!lastApply || lastApply.index === undefined) {
+      throw new Error(
+        "react-native-app-intents could not find an apply plugin line in android/app/build.gradle to add the KSP plugin.",
+      );
+    }
+
+    const end = lastApply.index + lastApply[0].length;
+    patched = `${patched.slice(0, end)}\napply plugin: "com.google.devtools.ksp"${patched.slice(end)}`;
+  }
+
+  if (!patched.includes("androidx.appfunctions:appfunctions:")) {
+    const match = /^dependencies\s*\{[^\n]*\n/m.exec(patched);
+
+    if (!match) {
+      throw new Error(
+        "react-native-app-intents could not find the dependencies block in android/app/build.gradle.",
+      );
+    }
+
+    const end = match.index + match[0].length;
+    patched = `${patched.slice(0, end)}    implementation("androidx.appfunctions:appfunctions:${APP_FUNCTIONS_VERSION}")\n    ksp("androidx.appfunctions:appfunctions-compiler:${APP_FUNCTIONS_VERSION}")\n${patched.slice(end)}`;
+  }
+
+  return patched;
+}
+
+export function isReactNativeBelowAppFunctionsMinimum(version: string | undefined): boolean {
+  const match = version ? /(\d+)\.(\d+)/.exec(version) : null;
+
+  if (!match) {
+    return false;
+  }
+
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  const [minMajor, minMinor] = APP_FUNCTIONS_MIN_REACT_NATIVE;
+  return major < minMajor || (major === minMajor && minor < minMinor);
+}
+
+async function warnIfReactNativeTooOld(projectRoot: string): Promise<void> {
+  try {
+    const manifest = JSON.parse(
+      await readFile(join(projectRoot, "node_modules", "react-native", "package.json"), "utf8"),
+    ) as { version?: string };
+
+    if (isReactNativeBelowAppFunctionsMinimum(manifest.version)) {
+      console.warn(
+        `react-native-app-intents: android.appFunctions needs React Native 0.88 or newer (found ${manifest.version}).`,
+      );
+    }
+  } catch {
+    // Without a readable react-native package there is nothing to compare.
+  }
+}
+
+function withAppFunctionsGradle(
+  config: ExpoAppConfig,
+  resolveOptions: ResolveExpoPluginOptions,
+): ExpoAppConfig {
+  let currentConfig = withProjectBuildGradle(config, async (modConfig) => {
+    const options = await resolveOptions(modConfig.modRequest.projectRoot);
+
+    if (usesAppFunctions(options)) {
+      modConfig.modResults.contents = applyAppFunctionsProjectGradle(modConfig.modResults.contents);
+    }
+
+    return modConfig;
+  });
+
+  currentConfig = withAppBuildGradle(currentConfig, async (modConfig) => {
+    const options = await resolveOptions(modConfig.modRequest.projectRoot);
+
+    if (usesAppFunctions(options)) {
+      await warnIfReactNativeTooOld(modConfig.modRequest.projectRoot);
+      modConfig.modResults.contents = applyAppFunctionsAppGradle(modConfig.modResults.contents);
+    }
+
+    return modConfig;
+  });
+
+  return withGradleProperties(currentConfig, async (modConfig) => {
+    const options = await resolveOptions(modConfig.modRequest.projectRoot);
+
+    if (usesAppFunctions(options)) {
+      modConfig.modResults = applyAppFunctionsGradleProperties(modConfig.modResults);
+    }
+
+    return modConfig;
+  });
+}
+
+type GradlePropertyItem = { type: string; key?: string; value?: string };
+
+export function applyAppFunctionsGradleProperties<T extends GradlePropertyItem>(items: T[]): T[] {
+  const existing = items.find(
+    (item) => item.type === "property" && item.key === "android.compileSdkVersion",
+  );
+
+  if (existing && Number(existing.value) >= Number(APP_FUNCTIONS_COMPILE_SDK)) {
+    return items;
+  }
+
+  const rest = items.filter((item) => item !== existing);
+  return [
+    ...rest,
+    {
+      type: "property",
+      key: "android.compileSdkVersion",
+      value: APP_FUNCTIONS_COMPILE_SDK,
+    } as T,
+  ];
 }
 
 const withReactNativeAppIntentsBase: ConfigPlugin<ExpoAppIntentsPluginOptions> = (
@@ -594,6 +758,8 @@ const withReactNativeAppIntentsBase: ConfigPlugin<ExpoAppIntentsPluginOptions> =
     modConfig.modResults = applyEntitlementsAppIntentsConfig(modConfig.modResults, options);
     return modConfig;
   });
+
+  currentConfig = withAppFunctionsGradle(currentConfig, resolveOptions);
 
   currentConfig = withGeneratedIOSSource(currentConfig, resolveOptions);
 
