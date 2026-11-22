@@ -12,6 +12,7 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+      <meta-data android:name="com.reactnativeappintents.appfunctions.bridge" android:value="com.avasapp.appintents.example.appfunctions.ReactNativeAppIntentsAppFunctionsBridge" />
       <property android:name="android.app.appfunctions.app_metadata" android:resource="@xml/app_metadata" />
       <meta-data
         android:name="android.app.shortcuts"
@@ -37,7 +38,7 @@
         </intent-filter>
       </activity>
           <service
-        android:name=".appfunctions.AppIntentsAppFunctionService"
+        android:name="com.avasapp.appintents.example.appfunctions.AppIntentsAppFunctionService"
         android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"
         android:exported="true"
         tools:targetApi="36">

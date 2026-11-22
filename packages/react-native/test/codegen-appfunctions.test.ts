@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { ensureAndroidAppFunctionsManifest } from "../src/codegen/appfunctions.js";
 import { defineAppIntentsConfig, generateAppIntents } from "../src/codegen/index.js";
 import { resolveExpoCodegenConfig } from "../src/expo-plugin/index.js";
 
@@ -157,7 +158,14 @@ test("android.appFunctions generates the Kotlin service, app_metadata and manife
     assert.match(kotlin, /AppFunctionManager\.APP_FUNCTION_STATE_ENABLED/);
     assert.doesNotMatch(kotlin, /fun notExposed\(/);
 
-    assert.match(manifest, /android:name="\.appfunctions\.AppIntentsAppFunctionService"/);
+    assert.match(
+      manifest,
+      /android:name="com\.avasapp\.appintents\.example\.appfunctions\.AppIntentsAppFunctionService"/,
+    );
+    assert.match(
+      manifest,
+      /<meta-data android:name="com\.reactnativeappintents\.appfunctions\.bridge" android:value="com\.avasapp\.appintents\.example\.appfunctions\.ReactNativeAppIntentsAppFunctionsBridge" \/>/,
+    );
     assert.match(manifest, /android\.app\.appfunctions\.app_metadata/);
     assert.match(manifest, /xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
     assert.match(manifest, /tools:targetApi="36"/);
@@ -207,6 +215,49 @@ test("regenerating is idempotent for the manifest service and property", async (
   } finally {
     await rm(cwd, { force: true, recursive: true });
   }
+});
+
+const manifestHead =
+  '<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">\n';
+
+test("manifest edit expands a self-closing <application />", () => {
+  const manifest = `${manifestHead}  <application android:name=".MainApplication" />\n</manifest>\n`;
+  const updated = ensureAndroidAppFunctionsManifest(manifest, appFunctionsConfig({}));
+
+  assert.match(updated, /<application android:name="\.MainApplication">/);
+  assert.match(updated, /<\/application>\s*<\/manifest>/);
+  assert.equal(updated.match(/BIND_APP_FUNCTION_SERVICE/g)?.length, 1);
+  assert.equal(ensureAndroidAppFunctionsManifest(updated, appFunctionsConfig({})), updated);
+});
+
+test("manifest edit ignores AppFunction markers inside XML comments", () => {
+  const manifest = `${manifestHead}  <application>\n    <!-- android.app.appfunctions.app_metadata android.app.appfunctions.AppFunctionService com.reactnativeappintents.appfunctions.bridge -->\n  </application>\n</manifest>\n`;
+  const updated = ensureAndroidAppFunctionsManifest(manifest, appFunctionsConfig({}));
+
+  assert.equal(updated.match(/BIND_APP_FUNCTION_SERVICE/g)?.length, 1);
+  assert.equal(
+    updated.match(/<property android:name="android\.app\.appfunctions\.app_metadata"/g)?.length,
+    1,
+  );
+  assert.equal(updated.match(/<meta-data /g)?.length, 1);
+});
+
+test("manifest edit indents the service like its siblings", () => {
+  const manifest = `${manifestHead}  <application>\n    <activity android:name=".MainActivity" />\n  </application>\n</manifest>\n`;
+  const updated = ensureAndroidAppFunctionsManifest(manifest, appFunctionsConfig({}));
+
+  assert.match(updated, /\n {4}<service\n {6}android:name=/);
+  assert.match(updated, /\n {4}<\/service>\n {2}<\/application>/);
+});
+
+test("manifest edit rewrites a relative service name to the qualified one", () => {
+  const manifest = `${manifestHead}  <application>\n    <service android:name=".appfunctions.AppIntentsAppFunctionService">\n      <action android:name="android.app.appfunctions.AppFunctionService" />\n    </service>\n  </application>\n</manifest>\n`;
+  const updated = ensureAndroidAppFunctionsManifest(manifest, appFunctionsConfig({}));
+
+  assert.match(
+    updated,
+    /android:name="com\.avasapp\.appintents\.example\.appfunctions\.AppIntentsAppFunctionService"/,
+  );
 });
 
 test("a project without android.appFunctions generates no AppFunction artifacts", async () => {

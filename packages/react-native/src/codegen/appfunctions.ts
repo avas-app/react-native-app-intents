@@ -836,13 +836,23 @@ export function getAndroidAppFunctionsServiceName(config: AppIntentsConfig): str
   return config.android?.appFunctions?.serviceName ?? DEFAULT_SERVICE_NAME;
 }
 
+const BRIDGE_META_DATA_NAME = "com.reactnativeappintents.appfunctions.bridge";
+
+function getQualifiedServiceName(config: AppIntentsConfig, serviceName: string): string {
+  const packageName = config.android?.packageName;
+
+  return packageName
+    ? `${packageName}.appfunctions.${serviceName}`
+    : `.appfunctions.${serviceName}`;
+}
+
 export function renderAndroidAppFunctionsServiceXml(config: AppIntentsConfig): string {
   const serviceName = getAndroidAppFunctionsServiceName(config);
   const xmlFileName = toSnakeCase(serviceName);
 
   return [
     "      <service",
-    `        android:name=".appfunctions.${escapeXml(serviceName)}"`,
+    `        android:name="${escapeXml(getQualifiedServiceName(config, serviceName))}"`,
     '        android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"',
     '        android:exported="true"',
     '        tools:targetApi="36">',
@@ -875,6 +885,11 @@ export function renderAndroidAppFunctionsAppMetadata(config: AppIntentsConfig): 
   ].join("\n");
 }
 
+// Same-length mask, so indexes found in it apply to the original text.
+function maskXmlComments(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->/g, (comment) => " ".repeat(comment.length));
+}
+
 export function ensureAndroidAppFunctionsManifest(
   manifest: string,
   config: AppIntentsConfig,
@@ -884,25 +899,77 @@ export function ensureAndroidAppFunctionsManifest(
   }
 
   let updated = manifest;
+  const masked = (): string => maskXmlComments(updated);
 
-  if (!/<manifest\b[^>]*xmlns:tools=/.test(updated)) {
-    updated = updated.replace(
-      /<manifest\b([^>]*)>/,
-      '<manifest$1\n    xmlns:tools="http://schemas.android.com/tools">',
+  if (!/<manifest\b[^>]*xmlns:tools=/.test(masked())) {
+    const match = /<manifest\b([^>]*)>/.exec(masked());
+
+    if (match) {
+      const end = match.index + match[0].length - 1;
+      updated = `${updated.slice(0, end)}\n    xmlns:tools="http://schemas.android.com/tools"${updated.slice(end)}`;
+    }
+  }
+
+  const selfClosing = /<application\b([^>]*?)\s*\/>/.exec(masked());
+
+  if (selfClosing) {
+    const lineStart = updated.lastIndexOf("\n", selfClosing.index) + 1;
+    const indent = /^[ \t]*/.exec(updated.slice(lineStart))?.[0] ?? "";
+    const attributes = updated.slice(selfClosing.index, selfClosing.index + selfClosing[0].length);
+
+    updated = `${updated.slice(0, selfClosing.index)}${attributes.replace(/\s*\/>$/, ">")}\n${indent}</application>${updated.slice(selfClosing.index + selfClosing[0].length)}`;
+  }
+
+  const open = /<application\b[^>]*>/.exec(masked());
+  const close = masked().indexOf("</application>");
+
+  if (!open || close < 0) {
+    return updated;
+  }
+
+  const openLineStart = updated.lastIndexOf("\n", open.index) + 1;
+  const appIndent = /^[ \t]*/.exec(updated.slice(openLineStart))?.[0] ?? "";
+  const childIndent = `${appIndent}  `;
+  const indentXml = (xml: string): string =>
+    xml
+      .split("\n")
+      .map((line) => `${childIndent}${line.slice(6)}`)
+      .join("\n");
+  const insertions: string[] = [];
+
+  if (!masked().includes("android.app.appfunctions.app_metadata")) {
+    insertions.push(
+      `${childIndent}<property android:name="android.app.appfunctions.app_metadata" android:resource="@xml/${APP_METADATA_RESOURCE_NAME}" />`,
     );
   }
 
-  if (!updated.includes("android.app.appfunctions.app_metadata")) {
-    updated = updated.replace(
-      /<application([^>]*)>/,
-      `<application$1>\n      <property android:name="android.app.appfunctions.app_metadata" android:resource="@xml/${APP_METADATA_RESOURCE_NAME}" />`,
+  const packageName = config.android.packageName;
+
+  if (packageName && !masked().includes(BRIDGE_META_DATA_NAME)) {
+    insertions.push(
+      `${childIndent}<meta-data android:name="${BRIDGE_META_DATA_NAME}" android:value="${escapeXml(packageName)}.appfunctions.ReactNativeAppIntentsAppFunctionsBridge" />`,
     );
   }
 
-  if (!updated.includes("android.app.appfunctions.AppFunctionService")) {
+  if (insertions.length > 0) {
+    const at = open.index + open[0].length;
+    updated = `${updated.slice(0, at)}\n${insertions.join("\n")}${updated.slice(at)}`;
+  }
+
+  if (!masked().includes("android.app.appfunctions.AppFunctionService")) {
+    const closeAt = masked().indexOf("</application>");
+    const lineStart = updated.lastIndexOf("\n", closeAt) + 1;
+    const service = indentXml(renderAndroidAppFunctionsServiceXml(config));
+
+    updated = /^[ \t]*$/.test(updated.slice(lineStart, closeAt))
+      ? `${updated.slice(0, lineStart)}${service}\n${updated.slice(lineStart)}`
+      : `${updated.slice(0, closeAt)}\n${service}\n${appIndent}${updated.slice(closeAt)}`;
+  } else if (packageName) {
+    const relative = `android:name=".appfunctions.${escapeXml(getAndroidAppFunctionsServiceName(config))}"`;
+
     updated = updated.replace(
-      /<\/application>/,
-      `${renderAndroidAppFunctionsServiceXml(config)}\n    </application>`,
+      relative,
+      `android:name="${escapeXml(getQualifiedServiceName(config, getAndroidAppFunctionsServiceName(config)))}"`,
     );
   }
 

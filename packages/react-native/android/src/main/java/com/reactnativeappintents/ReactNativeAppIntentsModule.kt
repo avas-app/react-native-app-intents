@@ -4,8 +4,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -152,9 +154,9 @@ class ReactNativeAppIntentsModule(
     }
 
     try {
-      val bridge = try {
-        Class.forName("${reactApplicationContext.packageName}.appfunctions.ReactNativeAppIntentsAppFunctionsBridge")
-      } catch (_: ClassNotFoundException) {
+      val bridge = findAppFunctionsBridge()
+      if (bridge == null) {
+        Log.w(TAG, "AppFunctions bridge not found; setAppFunctionEnabled($intentId) did nothing.")
         promise.resolve(null)
         return
       }
@@ -169,6 +171,28 @@ class ReactNativeAppIntentsModule(
     } catch (error: Exception) {
       promise.reject("set_app_function_enabled_failed", "Failed to update the AppFunction.", error)
     }
+  }
+
+  // Codegen writes the bridge class into app meta-data; the runtime package name differs under flavors or applicationIdSuffix.
+  private fun findAppFunctionsBridge(): Class<*>? {
+    val context = reactApplicationContext
+    val className = try {
+      context.packageManager
+        .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+        .metaData
+        ?.getString(APP_FUNCTIONS_BRIDGE_META_DATA)
+    } catch (_: Exception) {
+      null
+    }
+
+    for (candidate in listOfNotNull(className, "${context.packageName}.appfunctions.ReactNativeAppIntentsAppFunctionsBridge")) {
+      try {
+        return Class.forName(candidate)
+      } catch (_: ClassNotFoundException) {
+      }
+    }
+
+    return null
   }
 
   private fun catalogKey(entityId: String) = "$CATALOG_KEY_PREFIX$entityId"
@@ -353,6 +377,8 @@ class ReactNativeAppIntentsModule(
     private const val DONATION_SHORTCUT_IDS_KEY = "donationShortcutIds"
     private const val DYNAMIC_SHORTCUT_IDS_KEY = "dynamicShortcutIds"
     private const val CATALOG_KEY_PREFIX = "ReactNativeAppIntentsEntityCatalog."
+    private const val APP_FUNCTIONS_BRIDGE_META_DATA = "com.reactnativeappintents.appfunctions.bridge"
+    private const val TAG = "ReactNativeAppIntents"
     private const val PREFERENCES_NAME = "ReactNativeAppIntents"
     private val ANDROID_SHORTCUT_ICON_PATTERN = Regex("^@(drawable|mipmap)/([A-Za-z0-9_]+)$")
     private const val RECORDED_EXTRA = "com.reactnativeappintents.recorded"
