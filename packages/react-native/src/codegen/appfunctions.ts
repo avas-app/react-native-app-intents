@@ -715,9 +715,10 @@ function renderKotlinBridge(
 ): string[] {
   const cases = intents.map(
     (intent) =>
-      `      "${escapeKotlinString(intent.id)}" -> ${serviceName}.FUNCTION_ID_${toUpperSnakeCase(
+      // KSP emits `<entry point>Ids.<FUNCTION>_ID` constants (Google's add-appfunctions guide).
+      `      "${escapeKotlinString(intent.id)}" -> Base${serviceName}Ids.${toUpperSnakeCase(
         intent.id,
-      )}`,
+      )}_ID`,
   );
 
   return [

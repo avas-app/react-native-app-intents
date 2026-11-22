@@ -214,7 +214,7 @@ object ReactNativeAppIntentsAppFunctionsBridge {
   @JvmStatic
   fun setEnabled(context: Context, intentId: String, enabled: Boolean) {
     val functionId = when (intentId) {
-      "shipOrder" -> AppIntentsAppFunctionService.FUNCTION_ID_SHIP_ORDER
+      "shipOrder" -> BaseAppIntentsAppFunctionServiceIds.SHIP_ORDER_ID
       else -> return
     }
     val applicationContext = context.applicationContext

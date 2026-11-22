@@ -604,7 +604,7 @@ function withGeneratedIOSSource(
 }
 
 function usesAppFunctions(options: AppIntentsConfig): boolean {
-  return Boolean((options.android as { appFunctions?: unknown } | undefined)?.appFunctions);
+  return Boolean(options.android?.appFunctions);
 }
 
 export function applyAppFunctionsProjectGradle(source: string): string {
