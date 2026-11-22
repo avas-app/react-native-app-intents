@@ -34,6 +34,7 @@ export interface AppIntentsNativeModule {
   getEntityCatalog?(entityId: string): Promise<string | null>;
   getSyncedEntityCatalog?(entityId: string): Promise<string | null>;
   reindexEntities?(entityId: string | null): Promise<void>;
+  setAppFunctionEnabled?(intentId: string, enabled: boolean): Promise<void>;
   setEntityCatalog?(entityId: string, json: string): Promise<void>;
   setEntityTag?(reactTag: number, entityId: string | null, id: string | null): Promise<void>;
   setOnscreenEntity?(token: string, entityId: string | null, id: string | null): Promise<void>;

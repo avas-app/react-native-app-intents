@@ -297,14 +297,22 @@ test("expo plugin preserves configured native output paths", () => {
   });
 
   const iosConfig = resolveExpoCodegenConfig(
-    { name: "expo-app", slug: "expo-app", ios: { bundleIdentifier: "dev.expo.example" } },
+    {
+      name: "expo-app",
+      slug: "expo-app",
+      ios: { bundleIdentifier: "dev.expo.example" },
+    },
     options,
     "/tmp/expo-app",
     "ios",
     "ExpoApp",
   );
   const androidConfig = resolveExpoCodegenConfig(
-    { name: "expo-app", slug: "expo-app", android: { package: "dev.expo.example" } },
+    {
+      name: "expo-app",
+      slug: "expo-app",
+      android: { package: "dev.expo.example" },
+    },
     options,
     "/tmp/expo-app",
     "android",
@@ -399,5 +407,93 @@ test("expo plugin config drives codegen on expo-style paths", async () => {
     assert.match(generatedManifest, /android:scheme="expoexample"/);
   } finally {
     await rm(cwd, { force: true, recursive: true });
+  }
+});
+
+test("AppFunctions Gradle helpers add KSP and deps once", async () => {
+  const {
+    applyAppFunctionsAppGradle,
+    applyAppFunctionsGradleProperties,
+    applyAppFunctionsProjectGradle,
+    isReactNativeBelowAppFunctionsMinimum,
+  } = await import("../src/expo-plugin/index.js");
+  const root = 'buildscript {\n    dependencies {\n        classpath("a:b:1")\n    }\n}\n';
+  const app =
+    'apply plugin: "com.android.application"\napply plugin: "com.facebook.react"\n\ndependencies {\n    implementation("x:y:1")\n}\n';
+
+  const rootOut = applyAppFunctionsProjectGradle(root);
+  assert.match(rootOut, /com\.google\.devtools\.ksp\.gradle\.plugin:/);
+  assert.equal(applyAppFunctionsProjectGradle(rootOut), rootOut);
+
+  const appOut = applyAppFunctionsAppGradle(app);
+  assert.match(appOut, /apply plugin: "com\.google\.devtools\.ksp"/);
+  assert.match(appOut, /implementation\("androidx\.appfunctions:appfunctions:1\.0\.0"\)/);
+  assert.match(appOut, /ksp\("androidx\.appfunctions:appfunctions-compiler:1\.0\.0"\)/);
+  assert.equal(applyAppFunctionsAppGradle(appOut), appOut);
+
+  const props = applyAppFunctionsGradleProperties([
+    { type: "property", key: "android.compileSdkVersion", value: "36" },
+  ]);
+  assert.deepEqual(props, [{ type: "property", key: "android.compileSdkVersion", value: "37" }]);
+  assert.equal(applyAppFunctionsGradleProperties(props).length, 1);
+
+  assert.equal(isReactNativeBelowAppFunctionsMinimum("0.85.3"), true);
+  assert.equal(isReactNativeBelowAppFunctionsMinimum("0.88.1"), false);
+  assert.equal(isReactNativeBelowAppFunctionsMinimum(undefined), false);
+});
+
+test("AppFunctions app Gradle detects the KSP plugin by an apply line, not a comment", async () => {
+  const { applyAppFunctionsAppGradle } = await import("../src/expo-plugin/index.js");
+  const applyLine = /^apply plugin: "com\.google\.devtools\.ksp"$/gm;
+  const strip = (source: string) =>
+    source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const countApply = (source: string) => strip(source).match(applyLine)?.length ?? 0;
+  const deps = "\ndependencies {\n}\n";
+
+  const commented =
+    '// apply plugin: "com.google.devtools.ksp"\napply plugin: "com.android.application"\n' + deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(commented)), 1);
+
+  const blockCommented =
+    '/*\napply plugin: "com.google.devtools.ksp"\n*/\napply plugin: "com.android.application"\n' +
+    deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(blockCommented)), 1);
+
+  const applyAlready = 'apply plugin: "com.google.devtools.ksp"\n' + deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(applyAlready)), 1);
+
+  for (const alreadyApplied of [
+    'plugins {\n  id("com.google.devtools.ksp")\n}\n' + deps,
+    "plugins {\n  id 'com.google.devtools.ksp'\n}\n" + deps,
+    'apply plugin: "com.android.application"\nid "com.google.devtools.ksp"\n' + deps,
+  ]) {
+    assert.equal(
+      countApply(applyAppFunctionsAppGradle(alreadyApplied)),
+      0,
+      `should not add an apply plugin line for: ${alreadyApplied}`,
+    );
+  }
+});
+
+test("Expo plugin leaves Gradle files alone without android.appFunctions", async () => {
+  const { default: plugin } = await import("../src/expo-plugin/index.js");
+  const config = plugin(
+    { name: "x", slug: "x" } as never,
+    { intents: ["src/**/*.intents.ts"], scheme: "x" } as never,
+  ) as { mods?: { android?: Record<string, (c: any) => Promise<any>> } };
+  const mods = config.mods?.android ?? {};
+  const rootSrc = "buildscript {\n    dependencies {\n    }\n}\n";
+
+  for (const [name, source] of [
+    ["projectBuildGradle", rootSrc],
+    ["appBuildGradle", 'apply plugin: "a"\ndependencies {\n}\n'],
+  ] as const) {
+    const mod = mods[name];
+    assert.ok(mod, `${name} mod registered`);
+    const result = await mod({
+      modRequest: { projectRoot: process.cwd() },
+      modResults: { contents: source },
+    });
+    assert.equal(result.modResults.contents, source);
   }
 });

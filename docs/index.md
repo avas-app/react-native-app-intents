@@ -465,8 +465,9 @@ const orders = await appIntents.getEntities(order);
 catalog equal to the current one is a no-op, so calling `setEntities` on every
 launch is safe. Static `inventory` seeds Siri and Shortcuts, but a Spotlight entity
 is not indexed until the first `setEntities` or `reindexEntities`.
-The catalog is stored natively in `UserDefaults`, so keep it to the rows Siri
-needs. Clear it on logout with `setEntities(order, [])`.
+The catalog is stored natively on the device (`UserDefaults` on iOS, shared
+preferences on Android), so keep it to the rows Siri and agents need. Clear it
+on logout with `setEntities(order, [])`.
 
 ## Spotlight
 
@@ -519,8 +520,9 @@ useAppEntityTag(ref, order, row.id);
 
 The view needs `collapsable={false}` so it exists as a native view. The tag is cleared on unmount or when the id changes. It does nothing on Android and older iOS.
 
-`setEntities`, `getEntities`, `reindexEntities`, `useOnscreenEntity`, `useAppEntityTag` and Spotlight
-are iOS-only. On Android they resolve and do nothing.
+`reindexEntities`, `useOnscreenEntity`, `useAppEntityTag` and Spotlight are
+iOS-only. On Android they resolve and do nothing. `setEntities` and `getEntities`
+work on both platforms.
 
 ## Android App Actions contract
 
@@ -544,6 +546,118 @@ For an opt-in `adb` smoke test against the bare Android example app, run:
 ```bash
 RN_APP_INTENTS_ANDROID_E2E=1 bun test packages/react-native/test/android-app-actions.e2e.test.ts
 ```
+
+## Android AppFunctions
+
+Android AppFunctions (Android 16+) let Gemini and other on-device agents call an intent directly. It is opt-in at two levels: `android.appFunctions` in the codegen config turns generation on for the project, and `android.appFunction` on an intent exposes that intent. Turning on the project setting on its own exposes nothing.
+
+AppFunctions need React Native 0.88+ (AGP 9.1+), `compileSdk 37` and KSP. Add the KSP plugin to `android/build.gradle`:
+
+```gradle
+buildscript {
+  dependencies {
+    classpath("com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin:2.2.0-2.0.2")
+  }
+}
+```
+
+Apply it and add the dependencies in `android/app/build.gradle`, then set the SDK in `android/gradle.properties`:
+
+```gradle
+apply plugin: "com.google.devtools.ksp"
+
+dependencies {
+  implementation("androidx.appfunctions:appfunctions:1.0.0")
+  ksp("androidx.appfunctions:appfunctions-compiler:1.0.0")
+}
+```
+
+```properties
+android.compileSdkVersion=37
+```
+
+The KSP plugin version follows the app's Kotlin version; `2.2.0-2.0.2` matches Kotlin 2.2.0 on React Native 0.88. The Expo plugin adds the plugin, both dependencies and `compileSdk 37` during prebuild when `android.appFunctions` is set, so none of these lines are needed there.
+
+Enable it in the config:
+
+```ts
+export default defineAppIntentsConfig({
+  intents: ["src/**/*.intents.ts"],
+  scheme: "myapp",
+  android: {
+    manifest: "android/app/src/main/AndroidManifest.xml",
+    shortcutsOutput: "android/app/src/main/res/xml/app_shortcuts.xml",
+    packageName: "com.example.myapp",
+    appFunctions: {
+      output: "android/app/src/main/java/com/example/myapp/appfunctions/AppFunctions.kt",
+      appMetadata: { instructions: "Order tracking for the shop." },
+    },
+  },
+});
+```
+
+Then opt an intent in, and optionally an entity query:
+
+```ts
+export const order = defineEntity({
+  id: "order",
+  title: "Order",
+  catalog: "runtime",
+  schema: p.object({ orderNumber: p.string() }),
+  identifier: (order) => order.orderNumber,
+  displayRepresentation: (order) => ({ title: `Order ${order.orderNumber}` }),
+  android: { appFunctionQuery: true },
+});
+
+export const openOrder = defineIntent({
+  id: "openOrder",
+  title: "Open Order",
+  description: "Open a saved order.",
+  params: {
+    order: p.entity(order, { title: "Order", prompt: "Which order?" }),
+    note: p.string({ optional: true, title: "Note", prompt: "Add a note." }),
+  },
+  android: { appFunction: true },
+  behavior: { opensAppToForeground: true },
+});
+```
+
+`android.appFunctionQuery` generates a `find<Entity>s(query: String?)` function so the agent can resolve an entity before calling the intent.
+
+Parameters map to Kotlin types:
+
+| Definition          | AppFunction type                           |
+| ------------------- | ------------------------------------------ |
+| `p.string()`        | `String`                                   |
+| `p.int()`           | `Int`                                      |
+| `p.number()`        | `Double`                                   |
+| `p.bool()`          | `Boolean`                                  |
+| `p.date()`          | `String` (ISO-8601)                        |
+| `p.object({ ... })` | generated `@AppFunctionSerializable` class |
+| `p.entity(Order)`   | generated `OrderEntity` class              |
+
+Optional parameters are nullable. A `default` is applied in the function body, because agents send null or a zero value for omitted parameters, so Kotlin parameter defaults do not apply. The function KDoc is built from `title`, `description` and each parameter's `title`/`prompt`, which the agent reads; only the base locale is emitted.
+
+Calls arrive in `onIntent` like any other intent, with the same payload and invocation id. The function returns `status: "delivered"` and the invocation id as soon as the call is queued, and does not wait for JS. If the intent has `behavior.opensAppToForeground`, the app is opened as a best effort: Android 16 blocks background activity launches, so a blocked call stays queued until the app is opened.
+
+`setEntities` also works on Android now, storing the catalog on the device. The generated `find<Entity>s` functions read that catalog and use the codegen `inventory` when nothing is stored.
+
+Set `android.appFunction: { enabledByDefault: false }` to gate a function, then enable or disable it at runtime:
+
+```ts
+await appIntents.setAppFunctionEnabled(openOrder, true);
+```
+
+`setAppFunctionEnabled(intent, enabled)` is a no-op on iOS, on web and below Android 16.
+
+To check generated functions, use an Android 16 QPR2 or newer image:
+
+```bash
+adb shell cmd app_function list-app-functions --package com.example.myapp
+adb shell cmd app_function execute-app-function --package com.example.myapp ...
+```
+
+Calls from Gemini also require the app to be in Google's Connected Apps Platform developer preview.
 
 ## iOS Siri / App Intents contract
 

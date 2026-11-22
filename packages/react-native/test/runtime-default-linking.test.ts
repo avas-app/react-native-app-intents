@@ -279,7 +279,7 @@ test("default linking: on iOS a native run and its in-process event deliver once
 
 test("default linking: an iOS cold-start Linking url is delivered even when getInitialIntent returns a native run", async () => {
   rn.os = "ios";
-  rn.native = createNative([withId(base, "n1")]);
+  rn.native = createNative([withId(`${base}?from=native`, "n1")]);
   rn.linkingInitialUrl = base;
   const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
   const urls: string[] = [];
@@ -289,6 +289,38 @@ test("default linking: an iOS cold-start Linking url is delivered even when getI
   const first = await runtime.getInitialIntent();
   await settle();
 
-  assert.equal(first?.url, withId(base, "n1"));
+  assert.equal(first?.url, withId(`${base}?from=native`, "n1"));
   assert.ok(urls.includes(base));
+});
+
+test("default linking: on iOS a url recorded natively and also forwarded to Linking delivers once", async () => {
+  rn.os = "ios";
+  const native = createNative([withId(base, "rec1")]);
+  rn.native = native;
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  const urls: string[] = [];
+  runtime.onAnyIntent((event) => {
+    urls.push(event.url);
+  });
+  await settle();
+  rn.linkingListeners.forEach((listener) => listener({ url: base }));
+  await settle();
+
+  assert.deepEqual(urls, [withId(base, "rec1")]);
+});
+
+test("default linking: on iOS a cold-start url recorded natively and also in Linking delivers once", async () => {
+  rn.os = "ios";
+  rn.native = createNative([withId(base, "rec2")]);
+  rn.linkingInitialUrl = base;
+  const runtime = createAppIntentsRuntime({ scheme: "example", intents: [pingIntent] as const });
+  const urls: string[] = [];
+  runtime.onAnyIntent((event) => {
+    urls.push(event.url);
+  });
+  const first = await runtime.getInitialIntent();
+  await settle();
+
+  assert.equal(first?.url, withId(base, "rec2"));
+  assert.deepEqual(urls, []);
 });

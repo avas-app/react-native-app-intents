@@ -14,6 +14,7 @@ import {
 } from "../core/index.js";
 
 import type { AppIntentsConfig } from "./config.js";
+import { ensureAndroidAppFunctionsManifest, renderAndroidAppFunctions } from "./appfunctions.js";
 
 export interface GeneratedArtifact {
   platform: "ios" | "android" | "types";
@@ -2103,12 +2104,31 @@ async function renderArtifacts(config: AppIntentsConfig, cwd: string): Promise<R
     });
   }
 
-  const androidManifest = config.android?.manifest
+  if (config.android?.appFunctions) {
+    const appFunctions = await renderAndroidAppFunctions(
+      normalizedIntents,
+      normalizedEntities,
+      config,
+      cwd,
+    );
+
+    for (const artifact of appFunctions.artifacts) {
+      artifacts.push({ ...artifact, platform: "android" });
+    }
+
+    diagnostics.push(...appFunctions.diagnostics);
+  }
+
+  let androidManifest = config.android?.manifest
     ? ensureAndroidManifest(
         (await readExistingFile(resolve(cwd, config.android.manifest))) ?? "<manifest />",
         config,
       )
     : undefined;
+
+  if (androidManifest !== undefined && config.android?.appFunctions) {
+    androidManifest = ensureAndroidAppFunctionsManifest(androidManifest, config);
+  }
 
   return {
     artifacts,
