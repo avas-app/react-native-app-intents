@@ -48,7 +48,7 @@ test("setAppFunctionEnabled is a no-op without the native method (iOS, web)", as
 });
 
 test("an AppFunction url from native reaches onIntent", async () => {
-  const url = `app-intents-function://app-intents/openOrder?payload=${encodeURIComponent(
+  const url = `t://app-intents/openOrder?payload=${encodeURIComponent(
     JSON.stringify({ orderNumber: "4521" }),
   )}&invocationId=abc`;
   const runtime = createAppIntentsRuntime({

@@ -10,19 +10,17 @@ import java.util.UUID
 object ReactNativeAppIntentsAppFunctions {
   private const val TAG = "ReactNativeAppIntents"
 
-  // The JS runtime accepts this scheme next to the app's own; native doesn't know the app's scheme.
-  private const val URL_SCHEME = "app-intents-function"
-
   @JvmStatic
   fun deliver(
     context: Context,
+    scheme: String,
     intentId: String,
     payloadJson: String,
     opensAppToForeground: Boolean,
   ): String {
     val invocationId = UUID.randomUUID().toString()
     val uri = Uri.Builder()
-      .scheme(URL_SCHEME)
+      .scheme(scheme)
       .authority("app-intents")
       .appendPath(intentId)
       .appendQueryParameter("payload", payloadJson)

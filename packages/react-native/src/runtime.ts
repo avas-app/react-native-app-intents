@@ -474,9 +474,6 @@ export function deserializeIntentParams<TIntent extends IntentDefinition<any>>(
   return parsed as ParamsOf<TIntent>;
 }
 
-// Android AppFunction calls are queued natively, which doesn't know the app's scheme.
-const APP_FUNCTION_URL_SCHEME = "app-intents-function";
-
 interface ParsedIntentUrl {
   host: string;
   pathSegments: string[];
@@ -531,10 +528,7 @@ export function parseIntentUrl<TIntents extends IntentTuple>(
 ): IntentEventUnion<TIntents> | null {
   const parsedUrl = parseCustomSchemeUrl(url);
 
-  if (
-    !parsedUrl ||
-    (parsedUrl.scheme !== context.scheme && parsedUrl.scheme !== APP_FUNCTION_URL_SCHEME)
-  ) {
+  if (!parsedUrl || parsedUrl.scheme !== context.scheme) {
     return null;
   }
 
