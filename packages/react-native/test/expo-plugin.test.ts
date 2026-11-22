@@ -442,6 +442,39 @@ test("AppFunctions Gradle helpers add KSP and deps once", async () => {
   assert.equal(isReactNativeBelowAppFunctionsMinimum(undefined), false);
 });
 
+test("AppFunctions app Gradle detects the KSP plugin by an apply line, not a comment", async () => {
+  const { applyAppFunctionsAppGradle } = await import("../src/expo-plugin/index.js");
+  const applyLine = /^apply plugin: "com\.google\.devtools\.ksp"$/gm;
+  const strip = (source: string) =>
+    source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const countApply = (source: string) => strip(source).match(applyLine)?.length ?? 0;
+  const deps = "\ndependencies {\n}\n";
+
+  const commented =
+    '// apply plugin: "com.google.devtools.ksp"\napply plugin: "com.android.application"\n' + deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(commented)), 1);
+
+  const blockCommented =
+    '/*\napply plugin: "com.google.devtools.ksp"\n*/\napply plugin: "com.android.application"\n' +
+    deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(blockCommented)), 1);
+
+  const applyAlready = 'apply plugin: "com.google.devtools.ksp"\n' + deps;
+  assert.equal(countApply(applyAppFunctionsAppGradle(applyAlready)), 1);
+
+  for (const alreadyApplied of [
+    'plugins {\n  id("com.google.devtools.ksp")\n}\n' + deps,
+    "plugins {\n  id 'com.google.devtools.ksp'\n}\n" + deps,
+    'apply plugin: "com.android.application"\nid "com.google.devtools.ksp"\n' + deps,
+  ]) {
+    assert.equal(
+      countApply(applyAppFunctionsAppGradle(alreadyApplied)),
+      0,
+      `should not add an apply plugin line for: ${alreadyApplied}`,
+    );
+  }
+});
+
 test("Expo plugin leaves Gradle files alone without android.appFunctions", async () => {
   const { default: plugin } = await import("../src/expo-plugin/index.js");
   const config = plugin(

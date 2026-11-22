@@ -296,7 +296,7 @@ function renderKotlinSerializableClass(
 function renderKotlinJsonHelper(cls: KotlinSerializableClass): string {
   const lines: string[] = [
     `private fun ${cls.name}.reactNativeAppIntentsJson(): JSONObject {`,
-    "  val json = JSONObject()",
+    "  val rnaiJson = JSONObject()",
   ];
 
   for (const field of cls.fields) {
@@ -307,14 +307,14 @@ function renderKotlinJsonHelper(cls: KotlinSerializableClass): string {
 
     if (field.optional) {
       lines.push(`  if (${field.name} != null) {`);
-      lines.push(`    json.put("${key}", ${expression})`);
+      lines.push(`    rnaiJson.put("${key}", ${expression})`);
       lines.push("  }");
     } else {
-      lines.push(`  json.put("${key}", ${expression})`);
+      lines.push(`  rnaiJson.put("${key}", ${expression})`);
     }
   }
 
-  lines.push("  return json");
+  lines.push("  return rnaiJson");
   lines.push("}");
   return lines.join("\n");
 }
@@ -324,25 +324,21 @@ function getKotlinParseExpression(
   registry: KotlinRegistry,
 ): string {
   const key = escapeKotlinString(field.name);
+  const read = (accessor: string): string =>
+    field.optional
+      ? `if (!rnaiJson.isNull("${key}")) rnaiJson.${accessor}("${key}") else null`
+      : `rnaiJson.${accessor}("${key}")`;
 
   switch (field.definition.kind) {
     case "string":
     case "date":
-      return field.optional
-        ? `if (json.has("${key}")) json.getString("${key}") else null`
-        : `json.getString("${key}")`;
+      return read("getString");
     case "int":
-      return field.optional
-        ? `if (json.has("${key}")) json.getInt("${key}") else null`
-        : `json.getInt("${key}")`;
+      return read("getInt");
     case "number":
-      return field.optional
-        ? `if (json.has("${key}")) json.getDouble("${key}") else null`
-        : `json.getDouble("${key}")`;
+      return read("getDouble");
     case "bool":
-      return field.optional
-        ? `if (json.has("${key}")) json.getBoolean("${key}") else null`
-        : `json.getBoolean("${key}")`;
+      return read("getBoolean");
     case "object": {
       const name = registry.objectClassNames.get(field.definition);
 
@@ -350,20 +346,20 @@ function getKotlinParseExpression(
         throw new Error("Object parameter was not registered for AppFunction codegen.");
       }
 
-      const parse = `reactNativeAppIntentsParse${name}(json.getJSONObject("${key}"))`;
-      return field.optional ? `if (json.has("${key}")) ${parse} else null` : parse;
+      const parse = `reactNativeAppIntentsParse${name}(rnaiJson.getJSONObject("${key}"))`;
+      return field.optional ? `if (!rnaiJson.isNull("${key}")) ${parse} else null` : parse;
     }
     case "entity": {
       const name = getEntityClassName(field.definition.entity.id);
-      const parse = `reactNativeAppIntentsParse${name}(json.getJSONObject("${key}"))`;
-      return field.optional ? `if (json.has("${key}")) ${parse} else null` : parse;
+      const parse = `reactNativeAppIntentsParse${name}(rnaiJson.getJSONObject("${key}"))`;
+      return field.optional ? `if (!rnaiJson.isNull("${key}")) ${parse} else null` : parse;
     }
   }
 }
 
 function renderKotlinParseHelper(cls: KotlinSerializableClass, registry: KotlinRegistry): string {
   const lines: string[] = [
-    `private fun reactNativeAppIntentsParse${cls.name}(json: JSONObject): ${cls.name} {`,
+    `private fun reactNativeAppIntentsParse${cls.name}(rnaiJson: JSONObject): ${cls.name} {`,
     `  return ${cls.name}(`,
   ];
 
@@ -513,6 +509,10 @@ function getKotlinValueLiteral(
   value: unknown,
   registry: KotlinRegistry,
 ): string {
+  if (value === undefined || value === null) {
+    return "null";
+  }
+
   switch (definition.kind) {
     case "string":
     case "date":
@@ -556,10 +556,10 @@ function renderKotlinPayloadLines(
   const definitions = Object.entries(intent.intent.params) as [string, AnyParameterDefinition][];
 
   if (definitions.length === 0) {
-    return ['val payloadJson = "{}"'];
+    return ['val rnaiPayloadJson = "{}"'];
   }
 
-  const lines: string[] = ["val payload = JSONObject()"];
+  const lines: string[] = ["val rnaiPayload = JSONObject()"];
 
   for (const [name, definition] of definitions) {
     const optional = definition.optional === true && !hasDefault(definition);
@@ -575,13 +575,13 @@ function renderKotlinPayloadLines(
 
     if (optional) {
       const optionalPut = isContainer(definition) ? "it.reactNativeAppIntentsJson()" : "it";
-      lines.push(`${name}?.let { payload.put("${key}", ${optionalPut}) }`);
+      lines.push(`${name}?.let { rnaiPayload.put("${key}", ${optionalPut}) }`);
     } else {
-      lines.push(`payload.put("${key}", ${putValue})`);
+      lines.push(`rnaiPayload.put("${key}", ${putValue})`);
     }
   }
 
-  lines.push("val payloadJson = payload.toString()");
+  lines.push("val rnaiPayloadJson = rnaiPayload.toString()");
   return lines;
 }
 
@@ -627,14 +627,14 @@ function renderKotlinIntentFunction(
 
   lines.push(`  suspend fun ${intent.id}(${signature.join(", ")}): AppIntentResult {`);
   lines.push(...renderKotlinPayloadLines(intent, registry).map((line) => `    ${line}`));
-  lines.push("    val invocationId = ReactNativeAppIntentsAppFunctions.deliver(");
+  lines.push("    val rnaiInvocationId = ReactNativeAppIntentsAppFunctions.deliver(");
   lines.push("      applicationContext,");
   lines.push(`      "${escapeKotlinString(scheme)}",`);
   lines.push(`      "${escapeKotlinString(intent.id)}",`);
-  lines.push("      payloadJson,");
+  lines.push("      rnaiPayloadJson,");
   lines.push(`      ${intent.behavior.opensAppToForeground},`);
   lines.push("    )");
-  lines.push('    return AppIntentResult(status = "delivered", invocationId = invocationId)');
+  lines.push('    return AppIntentResult(status = "delivered", invocationId = rnaiInvocationId)');
   lines.push("  }");
   lines.push("");
   return lines;
@@ -657,20 +657,24 @@ function renderKotlinFindFunction(
 
   lines.push("  @AppFunctionDeclaration(isDescribedByKDoc = true)");
   lines.push(`  suspend fun find${toPascalCase(entity.id)}s(query: String?): List<${className}> {`);
-  lines.push("    val normalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()");
+  lines.push(
+    "    val rnaiNormalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()",
+  );
   lines.push("    return reactNativeAppIntentsCatalogEntries(");
   lines.push("      applicationContext,");
   lines.push(`      "${escapeKotlinString(entity.id)}",`);
   lines.push("    )");
   lines.push("      .filter { entry ->");
-  lines.push("        normalizedQuery == null ||");
-  lines.push("          entry.title.lowercase().contains(normalizedQuery) ||");
+  lines.push("        rnaiNormalizedQuery == null ||");
+  lines.push("          entry.title.lowercase().contains(rnaiNormalizedQuery) ||");
   lines.push(
-    "          entry.synonyms.any { synonym -> synonym.lowercase().contains(normalizedQuery) }",
+    "          entry.synonyms.any { synonym -> synonym.lowercase().contains(rnaiNormalizedQuery) }",
   );
   lines.push("      }");
   lines.push("      .mapNotNull { entry ->");
-  lines.push(`        reactNativeAppIntentsParse${className}(entry.value)`);
+  lines.push(
+    `        runCatching { reactNativeAppIntentsParse${className}(entry.value) }.getOrNull()`,
+  );
   lines.push("      }");
   lines.push("  }");
   lines.push("");

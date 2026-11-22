@@ -35,11 +35,11 @@ data class OrderEntity(
 )
 
 private fun OrderEntity.reactNativeAppIntentsJson(): JSONObject {
-  val json = JSONObject()
-  json.put("id", id)
-  json.put("number", number)
-  json.put("customer", customer)
-  return json
+  val rnaiJson = JSONObject()
+  rnaiJson.put("id", id)
+  rnaiJson.put("number", number)
+  rnaiJson.put("customer", customer)
+  return rnaiJson
 }
 
 /**
@@ -54,10 +54,10 @@ data class ShipOrderAddress(
 )
 
 private fun ShipOrderAddress.reactNativeAppIntentsJson(): JSONObject {
-  val json = JSONObject()
-  json.put("street", street)
-  json.put("city", city.reactNativeAppIntentsJson())
-  return json
+  val rnaiJson = JSONObject()
+  rnaiJson.put("street", street)
+  rnaiJson.put("city", city.reactNativeAppIntentsJson())
+  return rnaiJson
 }
 
 /**
@@ -70,16 +70,16 @@ data class ShipOrderAddressCity(
 )
 
 private fun ShipOrderAddressCity.reactNativeAppIntentsJson(): JSONObject {
-  val json = JSONObject()
-  json.put("name", name)
-  return json
+  val rnaiJson = JSONObject()
+  rnaiJson.put("name", name)
+  return rnaiJson
 }
 
-private fun reactNativeAppIntentsParseOrderEntity(json: JSONObject): OrderEntity {
+private fun reactNativeAppIntentsParseOrderEntity(rnaiJson: JSONObject): OrderEntity {
   return OrderEntity(
-    id = json.getInt("id"),
-    number = json.getString("number"),
-    customer = json.getString("customer"),
+    id = rnaiJson.getInt("id"),
+    number = rnaiJson.getString("number"),
+    customer = rnaiJson.getString("customer"),
   )
 }
 
@@ -164,24 +164,24 @@ abstract class BaseAppIntentsAppFunctionService : AppFunctionService() {
    */
   @AppFunctionDeclaration(isDescribedByKDoc = true, isEnabled = false)
   suspend fun shipOrder(order: OrderEntity, note: String?, count: Int, weight: Double, rush: Boolean, shipDate: String?, address: ShipOrderAddress, coupon: String?): AppIntentResult {
-    val payload = JSONObject()
-    payload.put("order", order.reactNativeAppIntentsJson())
-    note?.let { payload.put("note", it) }
-    payload.put("count", count)
-    payload.put("weight", weight)
-    payload.put("rush", rush)
-    shipDate?.let { payload.put("shipDate", it) }
-    payload.put("address", address.reactNativeAppIntentsJson())
-    payload.put("coupon", coupon ?: "SAVE10")
-    val payloadJson = payload.toString()
-    val invocationId = ReactNativeAppIntentsAppFunctions.deliver(
+    val rnaiPayload = JSONObject()
+    rnaiPayload.put("order", order.reactNativeAppIntentsJson())
+    note?.let { rnaiPayload.put("note", it) }
+    rnaiPayload.put("count", count)
+    rnaiPayload.put("weight", weight)
+    rnaiPayload.put("rush", rush)
+    shipDate?.let { rnaiPayload.put("shipDate", it) }
+    rnaiPayload.put("address", address.reactNativeAppIntentsJson())
+    rnaiPayload.put("coupon", coupon ?: "SAVE10")
+    val rnaiPayloadJson = rnaiPayload.toString()
+    val rnaiInvocationId = ReactNativeAppIntentsAppFunctions.deliver(
       applicationContext,
       "example",
       "shipOrder",
-      payloadJson,
+      rnaiPayloadJson,
       true,
     )
-    return AppIntentResult(status = "delivered", invocationId = invocationId)
+    return AppIntentResult(status = "delivered", invocationId = rnaiInvocationId)
   }
 
   /**
@@ -192,18 +192,18 @@ abstract class BaseAppIntentsAppFunctionService : AppFunctionService() {
    */
   @AppFunctionDeclaration(isDescribedByKDoc = true)
   suspend fun findOrders(query: String?): List<OrderEntity> {
-    val normalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()
+    val rnaiNormalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()
     return reactNativeAppIntentsCatalogEntries(
       applicationContext,
       "Order",
     )
       .filter { entry ->
-        normalizedQuery == null ||
-          entry.title.lowercase().contains(normalizedQuery) ||
-          entry.synonyms.any { synonym -> synonym.lowercase().contains(normalizedQuery) }
+        rnaiNormalizedQuery == null ||
+          entry.title.lowercase().contains(rnaiNormalizedQuery) ||
+          entry.synonyms.any { synonym -> synonym.lowercase().contains(rnaiNormalizedQuery) }
       }
       .mapNotNull { entry ->
-        reactNativeAppIntentsParseOrderEntity(entry.value)
+        runCatching { reactNativeAppIntentsParseOrderEntity(entry.value) }.getOrNull()
       }
   }
 }

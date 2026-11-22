@@ -35,18 +35,18 @@ data class OrderEntity(
 )
 
 private fun OrderEntity.reactNativeAppIntentsJson(): JSONObject {
-  val json = JSONObject()
-  json.put("id", id)
-  json.put("number", number)
-  json.put("customer", customer)
-  return json
+  val rnaiJson = JSONObject()
+  rnaiJson.put("id", id)
+  rnaiJson.put("number", number)
+  rnaiJson.put("customer", customer)
+  return rnaiJson
 }
 
-private fun reactNativeAppIntentsParseOrderEntity(json: JSONObject): OrderEntity {
+private fun reactNativeAppIntentsParseOrderEntity(rnaiJson: JSONObject): OrderEntity {
   return OrderEntity(
-    id = json.getInt("id"),
-    number = json.getString("number"),
-    customer = json.getString("customer"),
+    id = rnaiJson.getInt("id"),
+    number = rnaiJson.getString("number"),
+    customer = rnaiJson.getString("customer"),
   )
 }
 
@@ -124,17 +124,17 @@ abstract class BaseAppIntentsAppFunctionService : AppFunctionService() {
    */
   @AppFunctionDeclaration(isDescribedByKDoc = true, isEnabled = true)
   suspend fun openSavedOrder(order: OrderEntity?): AppIntentResult {
-    val payload = JSONObject()
-    payload.put("order", (order ?: OrderEntity(id = 1, number = "1234", customer = "Taylor")).reactNativeAppIntentsJson())
-    val payloadJson = payload.toString()
-    val invocationId = ReactNativeAppIntentsAppFunctions.deliver(
+    val rnaiPayload = JSONObject()
+    rnaiPayload.put("order", (order ?: OrderEntity(id = 1, number = "1234", customer = "Taylor")).reactNativeAppIntentsJson())
+    val rnaiPayloadJson = rnaiPayload.toString()
+    val rnaiInvocationId = ReactNativeAppIntentsAppFunctions.deliver(
       applicationContext,
       "example",
       "openSavedOrder",
-      payloadJson,
+      rnaiPayloadJson,
       true,
     )
-    return AppIntentResult(status = "delivered", invocationId = invocationId)
+    return AppIntentResult(status = "delivered", invocationId = rnaiInvocationId)
   }
 
   /**
@@ -145,18 +145,18 @@ abstract class BaseAppIntentsAppFunctionService : AppFunctionService() {
    */
   @AppFunctionDeclaration(isDescribedByKDoc = true)
   suspend fun findOrders(query: String?): List<OrderEntity> {
-    val normalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()
+    val rnaiNormalizedQuery = query?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()
     return reactNativeAppIntentsCatalogEntries(
       applicationContext,
       "Order",
     )
       .filter { entry ->
-        normalizedQuery == null ||
-          entry.title.lowercase().contains(normalizedQuery) ||
-          entry.synonyms.any { synonym -> synonym.lowercase().contains(normalizedQuery) }
+        rnaiNormalizedQuery == null ||
+          entry.title.lowercase().contains(rnaiNormalizedQuery) ||
+          entry.synonyms.any { synonym -> synonym.lowercase().contains(rnaiNormalizedQuery) }
       }
       .mapNotNull { entry ->
-        reactNativeAppIntentsParseOrderEntity(entry.value)
+        runCatching { reactNativeAppIntentsParseOrderEntity(entry.value) }.getOrNull()
       }
   }
 }

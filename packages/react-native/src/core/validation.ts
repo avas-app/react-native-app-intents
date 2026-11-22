@@ -550,6 +550,27 @@ function validateAndroidAppFunctionParameter(
   }
 }
 
+function validateAndroidAppFunctionDefaults(
+  scopeId: string,
+  intent: IntentDefinition<any>,
+  issues: string[],
+): void {
+  for (const [name, definition] of Object.entries(intent.params) as [
+    string,
+    AnyParameterDefinition,
+  ][]) {
+    if (!("default" in definition) || definition.default === undefined) {
+      continue;
+    }
+
+    const issue = validateParameterValue(definition, definition.default, name);
+
+    if (issue) {
+      appendIssue(issues, scopeId, `Default for parameter "${name}" is invalid: ${issue}.`);
+    }
+  }
+}
+
 function validateAndroidAppFunctionNames(
   scopeId: string,
   intent: IntentDefinition<any>,
@@ -577,6 +598,8 @@ function validateAndroidAppFunctionNames(
 
     validateAndroidAppFunctionParameter(definition, scopeId, name, issues);
   }
+
+  validateAndroidAppFunctionDefaults(scopeId, intent, issues);
 }
 
 function normalizeAndroidMetadata(

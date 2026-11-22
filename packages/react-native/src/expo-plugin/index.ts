@@ -625,10 +625,22 @@ export function applyAppFunctionsProjectGradle(source: string): string {
   return `${source.slice(0, end)}${classpath}\n${source.slice(end)}`;
 }
 
+const KSP_APPLY_PATTERN = /^\s*apply\s+plugin\s*:\s*["']com\.google\.devtools\.ksp["']/m;
+const KSP_ID_PATTERN = /\bid\s*\(?\s*["']com\.google\.devtools\.ksp["']\s*\)?/;
+
+function stripGradleComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
+function hasKspPlugin(source: string): boolean {
+  const stripped = stripGradleComments(source);
+  return KSP_APPLY_PATTERN.test(stripped) || KSP_ID_PATTERN.test(stripped);
+}
+
 export function applyAppFunctionsAppGradle(source: string): string {
   let patched = source;
 
-  if (!patched.includes("com.google.devtools.ksp")) {
+  if (!hasKspPlugin(patched)) {
     const lastApply = [...patched.matchAll(/^apply plugin: .+$/gm)].at(-1);
 
     if (!lastApply || lastApply.index === undefined) {
