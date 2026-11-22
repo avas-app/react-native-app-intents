@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.devtools.ksp"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -108,6 +109,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.appfunctions:appfunctions:1.0.0")
+    ksp("androidx.appfunctions:appfunctions-compiler:1.0.0")
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
@@ -117,3 +120,6 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// SPIKE: appfunctions 1.0.0 demands AGP 9.1 in its AAR metadata; RN 0.85 pins AGP 8.12.
+tasks.configureEach { t -> if (t.name.matches("check.*AarMetadata")) t.enabled = false }

@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -34,5 +35,18 @@
               android:host="app-intents" />
         </intent-filter>
       </activity>
+      <receiver android:name=".appfunctions.SpikeDebugReceiver" android:exported="true" />
+      <service
+        android:name=".appfunctions.SpikeAppFunctionService"
+        android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"
+        android:exported="true"
+        tools:targetApi="36">
+        <property android:name="android.app.appfunctions.schema" android:value="app_functions_schema.xsd" />
+        <property android:name="android.app.appfunctions.v2" android:value="spike_app_function_service.xml" />
+        <intent-filter>
+          <action android:name="android.app.appfunctions.AppFunctionService" />
+        </intent-filter>
+      </service>
+      <property android:name="android.app.appfunctions.app_metadata" android:resource="@xml/app_metadata" />
     </application>
 </manifest>
