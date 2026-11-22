@@ -467,6 +467,9 @@ export function resolveExpoCodegenConfig(
             ...(options.android?.shortcutsStringsOutput
               ? { shortcutsStringsOutput: toNativePath(options.android.shortcutsStringsOutput) }
               : {}),
+            ...(options.android?.appFunctions
+              ? { appFunctions: options.android.appFunctions }
+              : {}),
           },
         }
       : {}),

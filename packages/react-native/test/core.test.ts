@@ -328,3 +328,144 @@ test("normalizeReferencedEntities discovers entity dependencies from intent para
   assert.equal(entities[0]?.id, "Order");
   assert.equal(entities[0]?.inventory[0]?.displayRepresentation.title, "Order #1234");
 });
+
+test("normalizeIntentDefinitions captures android app function metadata", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {},
+    android: {
+      appFunction: {
+        enabledByDefault: false,
+        result: "delivered",
+      },
+    },
+  });
+
+  const [normalized] = normalizeIntentDefinitions([openOrder]);
+
+  assert.equal(normalized?.android?.appFunction?.enabledByDefault, false);
+  assert.equal(normalized?.android?.appFunction?.result, "delivered");
+});
+
+test("normalizeIntentDefinitions rejects Kotlin keyword parameter names for AppFunctions", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      object: p.string(),
+    },
+    android: {
+      appFunction: true,
+    },
+  });
+
+  assert.throws(
+    () => normalizeIntentDefinitions([openOrder]),
+    /"object" is not a Kotlin-safe name/,
+  );
+});
+
+test("normalizeIntentDefinitions rejects invalid Kotlin parameter names for AppFunctions", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      "order-number": p.string(),
+    },
+    android: {
+      appFunction: true,
+    },
+  });
+
+  assert.throws(
+    () => normalizeIntentDefinitions([openOrder]),
+    /"order-number" is not a Kotlin-safe name/,
+  );
+});
+
+test("normalizeIntentDefinitions rejects unsupported AppFunction parameter types", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {
+      value: { kind: "list" } as never,
+    },
+    android: {
+      appFunction: true,
+    },
+  });
+
+  assert.throws(
+    () => normalizeIntentDefinitions([openOrder]),
+    /has a type AppFunction codegen does not support/,
+  );
+});
+
+test("normalizeIntentDefinitions rejects an invalid AppFunction result mode", () => {
+  const openOrder = defineIntent({
+    id: "openOrder",
+    title: "Open Order",
+    params: {},
+    android: {
+      appFunction: { result: "queued" as never },
+    },
+  });
+
+  assert.throws(
+    () => normalizeIntentDefinitions([openOrder]),
+    /android\.appFunction\.result must be "delivered"/,
+  );
+});
+
+test("normalizeReferencedEntities requires a catalog or inventory for appFunctionQuery", () => {
+  const StaticOrder = defineEntity({
+    id: "StaticOrder",
+    schema: p.object({
+      id: p.int(),
+    }),
+    identifier: (order) => String(order.id),
+    displayRepresentation: (order) => ({ title: String(order.id) }),
+    android: {
+      appFunctionQuery: true,
+    },
+  });
+  const useOrder = defineIntent({
+    id: "useOrder",
+    title: "Use Order",
+    params: {
+      order: p.entity(StaticOrder),
+    },
+  });
+
+  assert.throws(
+    () => normalizeReferencedEntities([useOrder]),
+    /appFunctionQuery requires catalog: "runtime" or a static inventory/,
+  );
+});
+
+test("normalizeReferencedEntities captures appFunctionQuery for runtime entities", () => {
+  const Order = defineEntity({
+    id: "Order",
+    catalog: "runtime",
+    schema: p.object({
+      id: p.int(),
+    }),
+    identifier: (order) => String(order.id),
+    displayRepresentation: (order) => ({ title: String(order.id) }),
+    android: {
+      appFunctionQuery: true,
+    },
+  });
+  const useOrder = defineIntent({
+    id: "useOrder",
+    title: "Use Order",
+    params: {
+      order: p.entity(Order),
+    },
+  });
+
+  const entities = normalizeReferencedEntities([useOrder]);
+
+  assert.equal(entities[0]?.appFunctionQuery, true);
+});

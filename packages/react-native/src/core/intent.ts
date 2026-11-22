@@ -88,9 +88,21 @@ export interface AndroidAppActionOptions {
   };
 }
 
+export interface AndroidAppFunctionOptions {
+  /** Registers the generated AppFunction as enabled when the app is installed. Defaults to `true`; set `false` to gate it with `AppFunctionManager.setAppFunctionEnabled` at runtime. */
+  enabledByDefault?: boolean;
+  /** How the generated function returns its result. V1 supports only `"delivered"`. */
+  result?: "delivered";
+}
+
+/** Enables an Android AppFunction for the intent: `true` for defaults, or an options object. */
+export type AndroidAppFunction = boolean | AndroidAppFunctionOptions;
+
 export interface IntentAndroidOptions {
   /** Enables generation of an Android App Action capability for this intent. Define this for Android Assistant / App Actions, and omit it for iOS-only, Spotlight-only, or shortcut-only intents. */
   appAction?: AndroidAppActionOptions;
+  /** Enables generation of an Android AppFunction for this intent. Requires `android.appFunctions` in the codegen config; omit it for intents that should not be callable by Android agents. */
+  appFunction?: AndroidAppFunction;
 }
 
 /**
